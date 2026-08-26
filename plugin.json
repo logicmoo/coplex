@@ -1,0 +1,104 @@
+{
+  "id": "task_harness_pl",
+  "label": "Task Harness (SWI-Prolog)",
+  "description": "Codex/Copilot-style coding-agent harness implemented in SWI-Prolog. Provider-agnostic adapter loop, repository tools, permissions, and concurrent analysis-only subagents.",
+  "summary": "Load the Prolog harness, run plunit tests, and drive an agent loop from SWI-Prolog.",
+  "version": "0.1.0",
+  "entrypoint": "plugin.py",
+  "scan": "startup",
+  "routePrefix": "/task_harness_pl",
+  "docs": "README.md",
+  "kind": "custom",
+  "requestTimeoutSeconds": 0,
+  "env:variables": {},
+  "plugin-install": {
+    "requires": ["swipl"],
+    "install": "swipl -g true -t halt",
+    "files": [
+      "codex_harness.pl",
+      "codex_harness_server.pl",
+      "codex_harness_server_main.pl",
+      "test_codex_harness.pl",
+      "test_codex_harness_server.pl",
+      "example_codex_harness.pl"
+    ],
+    "steps": [
+      "Install SWI-Prolog 9+ (10.1.7 is known good).",
+      "From this plugin directory run: swipl -g run_tests -t halt test_codex_harness.pl",
+      "Also run the REST-layer suite: swipl -g run_tests -t halt test_codex_harness_server.pl",
+      "See README.md for adapter wiring, permission options, and the REST API; FEATURE_GUIDE.md for extension points and known pitfalls."
+    ]
+  },
+  "plugin-uninstall": {
+    "uninstall": null,
+    "steps": [
+      "Nothing to uninstall beyond SWI-Prolog itself (a shared system dependency, not owned by this plugin) -- remove this directory to drop the plugin, or set scan: disabled in plugins.json to keep it but stop scanning it."
+    ]
+  },
+  "plugin-init": [],
+  "plugin-lifecycle": {
+    "standalone": false,
+    "hooks": {
+      "install": "install",
+      "installAfter": "install_after",
+      "uninstall": "uninstall",
+      "uninstallAfter": "uninstall_after",
+      "workbenchStartup": "workbench_startup",
+      "workbenchStartupAfter": "workbench_startup_after",
+      "workbenchShutdown": "workbench_shutdown",
+      "workbenchShutdownAfter": "workbench_shutdown_after",
+      "workspaceStartup": "workspace_startup",
+      "workspaceStartupAfter": "workspace_startup_after",
+      "workspaceShutdown": "workspace_shutdown",
+      "workspaceShutdownAfter": "workspace_shutdown_after"
+    },
+    "note": "Implemented in plugin.py. workbenchStartup launches codex_harness_server_main.pl (a swipl subprocess hosting the REST API in codex_harness_server.pl) and waits for /health; workbenchShutdown asks it to shut down gracefully over POST /shutdown, falling back to an OS-level terminate. install checks that swipl is on PATH; installAfter runs the plunit suite as a smoke test. The workspace hooks are no-ops: harness instances are created on demand per caller via POST /harnesses, not one per workspace."
+  },
+  "plugin-api": {
+    "status": "status",
+    "config": "config",
+    "restart": "restart",
+    "shutdown": "shutdown",
+    "note": "Implemented in plugin.py, backed by the REST server in codex_harness_server.pl (routePrefix informational only -- the server listens directly on its own host:port, default http://localhost:8798, overridable via TASK_HARNESS_HOST/TASK_HARNESS_PORT). status reports swipl/server health; config describes the REST endpoints and the safe harness_new/2 option subset the server accepts from JSON; restart stops and relaunches the server subprocess; shutdown stops it. See README.md's REST API section for the full endpoint list and the security model (no request body is ever parsed as Prolog code or used to construct a callable)."
+  },
+  "ui": {
+    "pages": [
+      {
+        "id": "docs",
+        "label": "Task Harness (SWI-Prolog) Docs",
+        "kind": "docs",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/README.md",
+        "external": true,
+        "glyph": "?",
+        "group": "SYSTEM"
+      },
+      {
+        "id": "feature-guide",
+        "label": "Feature Guidance & Pitfalls",
+        "kind": "docs",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/FEATURE_GUIDE.md",
+        "external": true,
+        "glyph": "?",
+        "group": "SYSTEM"
+      },
+      {
+        "id": "harness-source",
+        "label": "Edit codex_harness.pl",
+        "kind": "configure",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/codex_harness.pl",
+        "external": true,
+        "glyph": "</>",
+        "group": "CAPABILITIES"
+      },
+      {
+        "id": "rest-server-source",
+        "label": "Edit codex_harness_server.pl (REST API)",
+        "kind": "configure",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/codex_harness_server.pl",
+        "external": true,
+        "glyph": "</>",
+        "group": "CAPABILITIES"
+      }
+    ]
+  }
+}
