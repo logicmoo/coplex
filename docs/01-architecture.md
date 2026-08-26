@@ -5,14 +5,14 @@
 `task_harness_pl` is deliberately split into three layers that only
 ever talk to the layer directly below them. Nothing in
 `codex_harness.pl` knows HTTP exists; nothing in
-`codex_harness_server.pl` knows about subprocess management; `plugin.py`
+`coplex_server.pl` knows about subprocess management; `plugin.py`
 never touches Prolog state directly, only the REST surface (plus a raw
 `swipl` invocation for install/tests).
 
 ```mermaid
 graph TD
     A["Layer 3: Process manager\nplugin.py + plugin.json"] -->|"spawns & health-checks\n(swipl subprocess)"| B
-    B["Layer 2: REST facade\ncodex_harness_server.pl\ncodex_harness_server_main.pl"] -->|"use_module + safe\npredicate calls only"| C
+    B["Layer 2: REST facade\ncoplex_server.pl\ncoplex_server_main.pl"] -->|"use_module + safe\npredicate calls only"| C
     C["Layer 1: Core engine\ncodex_harness.pl"]
     C -->|"call(Adapter, Req, Reply)"| D["Pluggable model adapter\n(scripted / mock / http_json / custom)"]
     C -->|"guarded tool dispatch"| E["Tools: file I/O, search, patch,\nshell, git, network, subagents"]
@@ -37,10 +37,10 @@ Why this split matters in practice:
 
 ## Why the REST entry point is a separate file
 
-`codex_harness_server.pl` is a library: `:- use_module(codex_harness_server)`
+`coplex_server.pl` is a library: `:- use_module(coplex_server)`
 never starts a server or blocks a thread, so test suites and other
 tooling can load it safely. The runnable entry point lives in
-`codex_harness_server_main.pl` instead, because SWI-Prolog's
+`coplex_server_main.pl` instead, because SWI-Prolog's
 `:- initialization(Goal, main)` directive fires whenever *that file* is
 loaded — including via a plain `use_module/1` from something else, not
 just when it's run as the top-level script. If the blocking
@@ -50,12 +50,12 @@ silently spin up a background HTTP server and hang. Keeping the
 split means:
 
 ```
-swipl codex_harness_server_main.pl --port=8840 --host=localhost
+swipl prolog/coplex_server_main.pl --port=8840 --host=localhost
 ```
 
 ...is the *only* thing that starts a server; everything else
-(`test_codex_harness_server.pl`, `plugin.py`'s `install_after` smoke
-test, a REPL session) can `use_module(codex_harness_server)` freely.
+(`test/test_codex_harness_server.pl`, `plugin.py`'s `install_after` smoke
+test, a REPL session) can `use_module(coplex_server)` freely.
 
 ## State model and persistence
 
@@ -132,7 +132,7 @@ concurrent-write races on the filesystem (see `subagent_allow_writes`).
 
 The workbench never talks to Prolog directly. `plugin.py`:
 
-1. Spawns `swipl codex_harness_server_main.pl --port=<P> --host=<H>`
+1. Spawns `swipl coplex_server_main.pl --port=<P> --host=<H>`
    as a detached background process (`subprocess.Popen`, own process
    group on Windows so it isn't killed by signals meant for the
    parent).

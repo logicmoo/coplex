@@ -1,18 +1,18 @@
 :- encoding(utf8).
 /*  test_codex_harness_server.pl
 
-    plunit tests for codex_harness_server.pl, the JSON REST facade
+    plunit tests for coplex_server.pl, the JSON REST facade
     over codex_harness.pl.  Starts a real server on an ephemeral
     localhost port and drives it with library(http/http_client), so
     these are true end-to-end HTTP tests, not just unit tests of the
     Prolog predicates.
 
     Run with:
-        swipl -g run_tests -t halt test_codex_harness_server.pl
+        swipl -g run_tests -t halt test/test_codex_harness_server.pl
 */
 
-:- use_module(codex_harness).
-:- use_module(codex_harness_server).
+:- use_module('../prolog/coplex/codex_harness').
+:- use_module('../prolog/coplex_server').
 :- use_module(library(http/http_open)).
 :- use_module(library(http/http_client)).
 :- use_module(library(http/json)).

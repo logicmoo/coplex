@@ -1,32 +1,33 @@
 :- encoding(utf8).
-:- module(codex_harness_server,
+:- module(coplex_server,
           [ server_start/2,            % +Port, +Host
             server_stop/0
           ]).
 
-/** <module> REST facade over codex_harness
+/** <module> REST facade over codex_harness (the "coplex" pack)
 
-Exposes the codex_harness/1 API (see codex_harness.pl) as a small JSON
-REST service so a host process -- e.g. the symbolic_learner_workbench
-"workbench" -- can create, drive, observe, and tear down harness
-instances over HTTP instead of embedding SWI-Prolog directly.  This is
-the concrete implementation of the `plugin-api` / `routePrefix` surface
-declared in plugin.json: it lets the workbench "puppet" this plugin.
+Exposes the codex_harness/1 API (see prolog/coplex/codex_harness.pl) as
+a small JSON REST service so a host process -- e.g. the
+symbolic_learner_workbench "workbench" -- can create, drive, observe,
+and tear down harness instances over HTTP instead of embedding
+SWI-Prolog directly. This is the concrete implementation of the
+`plugin-api` / `routePrefix` surface declared in plugin.json: it lets
+the workbench "puppet" this plugin.
 
 Run standalone for manual testing:
 
-    swipl codex_harness_server_main.pl --port=8840 --host=localhost
+    swipl prolog/coplex_server_main.pl --port=8840 --host=localhost
 
 This module is a plain library: loading it with use_module/1 never
-starts a server or blocks a thread.  The `codex_harness_server_main.pl`
+starts a server or blocks a thread.  The `coplex_server_main.pl`
 sibling file is the runnable entry point that calls server_start/2 and
 then blocks the process; keeping the two separate means test suites
-and other libraries can safely `:- use_module(codex_harness_server)`
+and other libraries can safely `:- use_module(coplex_server)`
 without accidentally spinning up a background HTTP server.
 
 Normally the server is started/stopped by plugin.py's process manager
 (see `workbench_startup/0` and `workbench_shutdown/0` there), which
-launches `codex_harness_server_main.pl` as a subprocess and also
+launches `coplex_server_main.pl` as a subprocess and also
 exposes the server through the plugin-api `status/0`, `config/0`,
 `restart/0` and `shutdown/0` hooks.
 
@@ -83,10 +84,10 @@ an open connection or a Prolog client:
   * `GET /harnesses/<id>` returns the full snapshot (same fields plus
     the complete `messages`/`tool_activity` history) for a detail view.
 
-@see codex_harness.pl, README.md, FEATURE_GUIDE.md
+@see prolog/coplex/codex_harness.pl, README.md, FEATURE_GUIDE.md
 */
 
-:- use_module(codex_harness).
+:- use_module(coplex/codex_harness).
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_json)).
@@ -146,7 +147,7 @@ server_start(Port, Host) :-
     ),
     http_server(http_dispatch, [port(Port), ip(Host)]),
     asserta(running_port(Port)),
-    debug(codex_harness_server, 'listening on ~w:~w', [Host, Port]).
+    debug(coplex_server, 'listening on ~w:~w', [Host, Port]).
 
 %!  server_stop is det.
 %

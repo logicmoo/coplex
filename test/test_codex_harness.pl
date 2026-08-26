@@ -1,5 +1,5 @@
 :- encoding(utf8).
-:- use_module(codex_harness).
+:- use_module('../prolog/coplex/codex_harness').
 :- use_module(library(plunit)).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).

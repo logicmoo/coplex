@@ -1,7 +1,7 @@
-"""task_harness_pl workbench plugin.
+"""task_harness_pl workbench plugin (backed by the "coplex" pack).
 
-The coding-agent loop lives in SWI-Prolog (`codex_harness.pl`) and is
-exposed over HTTP by `codex_harness_server.pl`, a small JSON REST
+The coding-agent loop lives in SWI-Prolog (`prolog/coplex/codex_harness.pl`)
+and is exposed over HTTP by `prolog/coplex_server.pl`, a small JSON REST
 facade built only from SWI's bundled http libraries (see that file's
 module docstring for the endpoint list and the security model: no
 request body is ever parsed as Prolog code or call/N'd by name).
@@ -19,7 +19,7 @@ This module is the Python side of the contract declared in
   a test) can inspect/drive this plugin without touching Prolog.
 
 The lifecycle hooks manage *this process's* one shared
-codex_harness_server.pl instance (started once at workbench startup,
+coplex_server.pl instance (started once at workbench startup,
 stopped at workbench shutdown); the plugin-api functions let a caller
 inspect/restart/stop that same instance on demand. Harness instances
 themselves are created on demand per caller via POST /harnesses, so
@@ -27,6 +27,12 @@ there is nothing workspace-scoped to start or stop.
 
 No new third-party dependencies: only the standard library and
 `swipl` (already required by plugin.json) are used.
+
+This file intentionally stays at the repository root rather than
+moving under `prolog/`/`src/` -- the workbench loads it directly via
+plugin.json's `"entrypoint": "plugin.py"` contract. `pyproject.toml`
+declares it as a top-level py-module so it can *also* be published to
+PyPI without disturbing that contract.
 """
 
 from __future__ import annotations
@@ -43,10 +49,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 PLUGIN_ID = "task_harness_pl"
-HARNESS_MODULE = "codex_harness.pl"
-SERVER_MODULE = "codex_harness_server.pl"
-SERVER_MAIN = "codex_harness_server_main.pl"
-TEST_SUITE = "test_codex_harness.pl"
+HARNESS_MODULE = "prolog/coplex/codex_harness.pl"
+SERVER_MODULE = "prolog/coplex_server.pl"
+SERVER_MAIN = "prolog/coplex_server_main.pl"
+TEST_SUITE = "test/test_codex_harness.pl"
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 STATE_FILE = PLUGIN_DIR / ".harness_server_state.json"
@@ -192,7 +198,7 @@ def server_status() -> dict:
 
 
 def start_server(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> dict:
-    """Start codex_harness_server.pl as a background swipl process, if
+    """Start coplex_server_main.pl as a background swipl process, if
     not already running. Waits for /health to answer before returning."""
     existing = server_status()
     if existing.get("running"):
@@ -204,7 +210,7 @@ def start_server(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> dict:
 
     server_pl = PLUGIN_DIR / SERVER_MAIN
     if not server_pl.exists():
-        return {"ok": False, "error": f"{SERVER_MAIN} not found next to plugin.py"}
+        return {"ok": False, "error": f"{SERVER_MAIN} not found under the plugin directory"}
 
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
 

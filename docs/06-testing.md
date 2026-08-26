@@ -4,20 +4,20 @@
 
 | Suite | File | Style | What it proves |
 |---|---|---|---|
-| Core engine | `test_codex_harness.pl` | Pure in-process plunit, `scripted`/`mock` adapter only — no network, no live model | The agent loop, every tool, and the permission model behave correctly in isolation. |
-| REST facade | `test_codex_harness_server.pl` | plunit driving a **real HTTP server** on an ephemeral localhost port via `library(http/http_open)` | The JSON wire format, routing, status codes, and REST-specific security/UI contracts (async run, CORS, list summaries) all work end-to-end over the wire, not just at the Prolog call level. |
+| Core engine | `test/test_codex_harness.pl` | Pure in-process plunit, `scripted`/`mock` adapter only — no network, no live model | The agent loop, every tool, and the permission model behave correctly in isolation. |
+| REST facade | `test/test_codex_harness_server.pl` | plunit driving a **real HTTP server** on an ephemeral localhost port via `library(http/http_open)` | The JSON wire format, routing, status codes, and REST-specific security/UI contracts (async run, CORS, list summaries) all work end-to-end over the wire, not just at the Prolog call level. |
 
 Run both:
 
 ```
-swipl -g run_tests -t halt test_codex_harness.pl
-swipl -g run_tests -t halt test_codex_harness_server.pl
+swipl -g run_tests -t halt test/test_codex_harness.pl
+swipl -g run_tests -t halt test/test_codex_harness_server.pl
 ```
 
 (30 tests / 9 tests respectively at the time of writing — see below
 for what each one covers.)
 
-## `test_codex_harness.pl` — 30 tests, by category
+## `test/test_codex_harness.pl` — 30 tests, by category
 
 **Lifecycle & conversation state**
 - `new_close` — create/destroy doesn't leak or error.
@@ -90,7 +90,7 @@ for what each one covers.)
   is genuinely read-only, proving `subagent_allow_writes` actually
   gates write access rather than being decorative.
 
-## `test_codex_harness_server.pl` — 9 tests
+## `test/test_codex_harness_server.pl` — 9 tests
 
 - `health` — `GET /health` liveness.
 - `tools_nonempty` — `GET /tools` mirrors the core catalog over HTTP.

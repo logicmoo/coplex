@@ -2,7 +2,7 @@
 
 ## Why this layer exists
 
-Neither `codex_harness.pl` nor `codex_harness_server.pl` know they're
+Neither `codex_harness.pl` nor `coplex_server.pl` know they're
 being run by a host application ("the workbench"). `plugin.py` is the
 adapter between the workbench's generic plugin contract (a fixed set
 of lifecycle hook names and a small admin API) and this specific
@@ -23,7 +23,7 @@ sequenceDiagram
     Py-->>Host: {ok, returncode, log}
 
     Host->>Py: workbenchStartup()
-    Py->>SW: Popen(swipl codex_harness_server_main.pl --port --host)
+    Py->>SW: Popen(swipl coplex_server_main.pl --port --host)
     Py->>State: write {pid, host, port, started_at}
     Py->>SW: poll GET /health (≤10s)
     Py-->>Host: {ok:true, pid, port, host, health}
@@ -78,7 +78,7 @@ uncaught exception.
 
 1. Short-circuits if `server_status()` already reports `running` (idempotent).
 2. Resolves `swipl` via `shutil.which`; fails clearly if absent.
-3. `subprocess.Popen([swipl, codex_harness_server_main.pl, f"--port={port}", f"--host={host}"])`
+3. `subprocess.Popen([swipl, coplex_server_main.pl, f"--port={port}", f"--host={host}"])`
    with stdio redirected to `DEVNULL` and, on Windows,
    `CREATE_NEW_PROCESS_GROUP` so the child isn't tied to the parent's
    console/signal group.
@@ -117,7 +117,7 @@ crash doesn't cause every subsequent call to falsely report "running".
 |---|---|---|---|
 | `TASK_HARNESS_HOST` | `plugin.py` (`workbench_startup`, `restart`) | `localhost` | Bind host passed to the subprocess. |
 | `TASK_HARNESS_PORT` | `plugin.py` (same) | `8840` | Bind port passed to the subprocess. |
-| `TASK_HARNESS_CORS_ORIGIN` | `codex_harness_server.pl` (`configure_cors/0`, read directly by the Prolog process, not by `plugin.py`) | `*` | CORS allowlist — comma-separated origins, or `""` to disable. See [04-rest-api.md](04-rest-api.md). |
+| `TASK_HARNESS_CORS_ORIGIN` | `coplex_server.pl` (`configure_cors/0`, read directly by the Prolog process, not by `plugin.py`) | `*` | CORS allowlist — comma-separated origins, or `""` to disable. See [04-rest-api.md](04-rest-api.md). |
 
 Note the asymmetry: host/port are resolved by `plugin.py` and passed
 as CLI flags to the subprocess, while CORS origin is read directly by
@@ -156,6 +156,6 @@ with `jq` or a quick manual smoke test.
   `README.md` and `FEATURE_GUIDE.md`, rendered by the host's docs
   viewer) and two "configure" shortcuts straight to the two most
   commonly edited source files (`codex_harness.pl`,
-  `codex_harness_server.pl`). This `docs/` folder is not yet wired
+  `coplex_server.pl`). This `docs/` folder is not yet wired
   into `ui.pages` — add an entry here if the host should surface it
   directly rather than only via the repo file tree.

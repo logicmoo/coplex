@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coplex"
+version = "1.0.0"
+description = "Process manager / workbench-plugin glue for the coplex SWI-Prolog coding-agent harness and its REST server."
+readme = "README.md"
+license = { text = "LGPL-3.0-or-later" }
+requires-python = ">=3.9"
+authors = [
+    { name = "logicmoo" },
+]
+keywords = ["prolog", "swi-prolog", "agent", "codex", "copilot", "rest", "coding-agent"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Prolog",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/logicmoo/coplex"
+Repository = "https://github.com/logicmoo/coplex"
+Documentation = "https://github.com/logicmoo/coplex/tree/master/docs"
+
+# plugin.py stays at the repository root (not under src/) because the
+# symbolic_learner_workbench host loads it directly by relative path per
+# plugin.json's "entrypoint": "plugin.py" contract. Declaring it as a
+# single top-level module -- rather than moving it into a package
+# directory -- keeps that contract intact while still making it
+# `pip install`-able as the "coplex" distribution (import name stays
+# `plugin`; the distribution name is what's published to PyPI).
+[tool.setuptools]
+py-modules = ["plugin"]

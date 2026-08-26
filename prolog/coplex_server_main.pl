@@ -1,29 +1,29 @@
 :- encoding(utf8).
-/*  codex_harness_server_main.pl
+/*  coplex_server_main.pl
 
-    Standalone entry point for codex_harness_server.pl.  This is the
+    Standalone entry point for coplex_server.pl.  This is the
     file plugin.py's process manager spawns as a background swipl
     process; it is intentionally NOT the same file as the library
-    module (codex_harness_server.pl), because
+    module (coplex_server.pl), because
     `:- initialization(main, main)` fires whenever *this* file is
     loaded -- including via a plain `use_module/1` from another
     script -- and a library that silently starts a blocking HTTP
     server as a side effect of being loaded would be a nasty surprise
-    for anything that just wants to `use_module(codex_harness_server)`
+    for anything that just wants to `use_module(coplex_server)`
     (e.g. the test suite).  Keeping the runnable entry point in its
     own file avoids that trap entirely.
 
     Usage:
-        swipl codex_harness_server_main.pl --port=8840 --host=localhost
+        swipl prolog/coplex_server_main.pl --port=8840 --host=localhost
 */
 
-:- use_module(codex_harness_server).
+:- use_module(coplex_server).
 
 :- initialization(main, main).
 
 main(Argv) :-
     parse_argv(Argv, Port, Host),
-    format(user_error, "task_harness_pl REST server listening on ~w:~w~n", [Host, Port]),
+    format(user_error, "coplex REST server listening on ~w:~w~n", [Host, Port]),
     catch(server_start(Port, Host), Error,
           ( print_message(error, Error), halt(1) )),
     block_forever.

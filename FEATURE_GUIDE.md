@@ -30,13 +30,13 @@ need a small translation layer:
   bound to `localhost` on an ephemeral port) rather than a live provider,
   so tests stay hermetic and offline.
 
-## 2. Minimal UI — **DONE** (`codex_harness_server.pl` + `plugin.py`)
+## 2. Minimal UI — **DONE** (`coplex_server.pl` + `plugin.py`)
 
 `harness_snapshot/2` is the intended observation surface — it already
 returns a dict with running state, step count, last error, etc. This
 is now exposed over HTTP:
 
-- **Web**: `codex_harness_server.pl` implements `library(http/thread_httpd)`
+- **Web**: `coplex_server.pl` implements `library(http/thread_httpd)`
   + `library(http/http_dispatch)`, exposing `GET /harnesses/<id>`
   (snapshot as JSON) and `POST /harnesses/<id>/run|cancel|reset`. See
   the README's "REST API" section for the full endpoint table and
@@ -61,7 +61,7 @@ is now exposed over HTTP:
   `""` disables it), so a browser UI on a different origin/dev-server
   port needs no proxy.
 - The runnable entry point lives in a separate file,
-  `codex_harness_server_main.pl` — *not* in `codex_harness_server.pl`
+  `coplex_server_main.pl` — *not* in `coplex_server.pl`
   itself — because `:- initialization(Goal, main)` fires on plain
   `use_module/1` too, not only when a file is run as the top-level
   script. Putting it in the library file would auto-start a server
@@ -78,7 +78,7 @@ is now exposed over HTTP:
   /harnesses/<id>` covers it for now, but would cut the poll latency
   for a busier UI if ever needed.
 - Keep any *new* UI in its own file that depends on `codex_harness`
-  (as `codex_harness_server.pl` already does) — don't fold UI/network
+  (as `coplex_server.pl` already does) — don't fold UI/network
   code into the core module.
 
 ## 3. Additional tools
@@ -187,7 +187,7 @@ hunks only. If git binary patches or rename headers are needed:
 1. Real adapter for one concrete provider + hermetic test.
 2. `web_search_backend` reference implementation.
 3. ~~Minimal CLI or HTTP UI on top of `harness_snapshot/2`.~~ Done —
-   see `codex_harness_server.pl` / `codex_harness_server_main.pl`.
+   see `coplex_server.pl` / `coplex_server_main.pl`.
 4. Git write support / diff parser hardening (only if a task actually
    needs them — the read-only subset already covers most agent use
    cases).

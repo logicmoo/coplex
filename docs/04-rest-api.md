@@ -1,18 +1,18 @@
-# 04 — REST API (`codex_harness_server.pl`)
+# 04 — REST API (`coplex_server.pl`)
 
 ## Purpose
 
-`codex_harness_server.pl` exposes every public `codex_harness.pl`
+`coplex_server.pl` exposes every public `codex_harness.pl`
 predicate as JSON-in/JSON-out HTTP endpoints, so a host process — or a
 browser-based web UI — can create, drive, observe, and tear down
 harness instances without embedding SWI-Prolog. It is a **plain
-library**: `:- use_module(codex_harness_server)` never starts a server.
+library**: `:- use_module(coplex_server)` never starts a server.
 The runnable entry point is the sibling file
-`codex_harness_server_main.pl` (see
+`coplex_server_main.pl` (see
 [01-architecture.md](01-architecture.md) for why they're split):
 
 ```
-swipl codex_harness_server_main.pl --port=8840 --host=localhost
+swipl coplex_server_main.pl --port=8840 --host=localhost
 ```
 
 ## Endpoint reference
@@ -80,7 +80,7 @@ below until `running` flips back to `false`, then reads
 ```mermaid
 sequenceDiagram
     participant UI as Web UI
-    participant REST as codex_harness_server.pl
+    participant REST as coplex_server.pl
     participant Core as codex_harness.pl bg thread
 
     UI->>REST: POST /harnesses/:id/run async=true
@@ -186,7 +186,7 @@ term.**
   accepting an attacker-controlled string for any of them would be a
   remote-code-execution vector. There is a dedicated regression test
   for this (`goal_shaped_options_are_ignored` in
-  `test_codex_harness_server.pl`) that posts
+  `test/test_codex_harness_server.pl`) that posts
   `{"approval": "shell(rm)", ...}` and asserts creation still succeeds
   with the value simply dropped.
 - **Tool names on `POST /harnesses/<id>/tools/<name>` are only ever
@@ -227,6 +227,6 @@ curl -s -X DELETE http://localhost:8840/harnesses/3f9a...
 
 ## Tests
 
-`test_codex_harness_server.pl` drives all of the above end-to-end over
+`test/test_codex_harness_server.pl` drives all of the above end-to-end over
 real HTTP against a server started on an ephemeral localhost port —
 see [06-testing.md](06-testing.md) for the full breakdown.

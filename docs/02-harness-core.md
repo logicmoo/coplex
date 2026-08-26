@@ -147,7 +147,7 @@ there's no window where the async call has "returned" but the harness
 still looks idle. `guard_not_running/1` (shared by both entry points)
 throws `error(permission_error(start, harness_run, already_running), _)`
 if a run is already in flight, which the REST layer
-(`error_status/2` in `codex_harness_server.pl`) maps to HTTP 409 —
+(`error_status/2` in `coplex_server.pl`) maps to HTTP 409 —
 this is what makes it safe for a UI's "Run" button to be double-clicked
 without corrupting shared state.
 

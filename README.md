@@ -1,6 +1,7 @@
-# task_harness_pl
+# coplex
 
-SWI-Prolog Codex/Copilot-style coding-agent harness. One module,
+SWI-Prolog Codex/Copilot-style coding-agent harness, packaged as a
+standard SWI-Prolog pack (`pack.pl` + `prolog/`). One module,
 `codex_harness`, exposes object terms `codex_harness(Id)` with
 mutex-protected per-instance state.
 
@@ -10,10 +11,40 @@ mutex-protected per-instance state.
 > This README stays a quickstart/reference; `FEATURE_GUIDE.md` covers
 > extension points and known pitfalls.
 
+## Layout
+
+```
+pack.pl                        SWI-Prolog pack metadata
+prolog/
+  coplex_server.pl              REST facade -- library(coplex_server)
+  coplex_server_main.pl         runnable REST server entry point
+  coplex/
+    codex_harness.pl            core engine -- library(coplex/codex_harness)
+test/                           plunit suites
+examples/                       example scripts
+docs/                           design documentation
+plugin.py, plugin.json          symbolic_learner_workbench plugin glue
+```
+
+## Install
+
+As a pack, straight from GitHub:
+
+```prolog
+?- pack_install('https://github.com/logicmoo/coplex').
+?- use_module(library(coplex/codex_harness)).
+```
+
+Or clone/use in place without installing (as this repo itself does):
+
+```prolog
+?- [prolog/coplex/codex_harness].
+```
+
 ## Load
 
 ```prolog
-?- [codex_harness].
+?- [prolog/coplex/codex_harness].
 ?- harness_new([root('.'), adapter(scripted),
                 mock_replies([_{content:"hello", tool_calls:[]}])], H).
 ?- harness_run(H, "Say hello", Answer).
@@ -101,14 +132,14 @@ no Git worktree required.
 
 ## REST API
 
-`codex_harness_server.pl` exposes the harness over JSON/HTTP so a host
+`prolog/coplex_server.pl` exposes the harness over JSON/HTTP so a host
 process -- e.g. the workbench -- can create, drive, observe, and tear
 down harness instances without embedding SWI-Prolog. It is a plain
-library (loading it never starts a server); `codex_harness_server_main.pl`
+library (loading it never starts a server); `prolog/coplex_server_main.pl`
 is the runnable entry point:
 
 ```
-swipl codex_harness_server_main.pl --port=8840 --host=localhost
+swipl prolog/coplex_server_main.pl --port=8840 --host=localhost
 ```
 
 `plugin.py` manages this as a background subprocess through the plugin
@@ -197,18 +228,18 @@ callable term:
   `TASK_HARNESS_CORS_ORIGIN` if that default host binding is ever
   changed.
 
-Tests: `swipl -g run_tests -t halt test_codex_harness_server.pl` (spins
+Tests: `swipl -g run_tests -t halt test/test_codex_harness_server.pl` (spins
 up a real server on an ephemeral localhost port and drives it with
 `library(http/http_open)`).
 
 ## Tests
 
 ```
-swipl -g run_tests -t halt test_codex_harness.pl
-swipl -g run_tests -t halt test_codex_harness_server.pl
+swipl -g run_tests -t halt test/test_codex_harness.pl
+swipl -g run_tests -t halt test/test_codex_harness_server.pl
 ```
 
-Example: `swipl -s example_codex_harness.pl -t halt`.
+Example: `swipl -s examples/example_codex_harness.pl -t halt`.
 
 ## Limitations
 
@@ -219,3 +250,18 @@ Example: `swipl -s example_codex_harness.pl -t halt`.
 - No bundled UI: the REST API above (async run, list summaries, CORS)
   is designed to be driven by a separately-built web UI, not to ship
   one itself.
+
+## Packaging
+
+- **SWI-Prolog pack**: `pack.pl` at the repo root plus the required
+  `prolog/` directory make this installable via `pack_install/1` (see
+  Install above).
+- **Python**: `pyproject.toml` packages `plugin.py` (the
+  `symbolic_learner_workbench` process-manager glue, see
+  `plugin.json`) as the `coplex` PyPI distribution, without moving it
+  out of the repo root.
+
+## License
+
+LGPL-3.0-or-later -- see `LICENSE` (the LGPL addendum) and `COPYING`
+(the GPLv3 text it incorporates by reference).

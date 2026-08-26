@@ -1,5 +1,5 @@
 :- encoding(utf8).
-:- use_module(codex_harness).
+:- use_module('../prolog/coplex/codex_harness').
 
 %!  demo is det.
 %   Scripted adapter: read README.md then answer. No paid API.
