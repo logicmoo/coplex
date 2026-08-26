@@ -82,6 +82,15 @@
         "group": "SYSTEM"
       },
       {
+        "id": "design-docs",
+        "label": "Design Docs (architecture, REST, tools, testing)",
+        "kind": "docs",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/docs/README.md",
+        "external": true,
+        "glyph": "?",
+        "group": "SYSTEM"
+      },
+      {
         "id": "harness-source",
         "label": "Edit codex_harness.pl",
         "kind": "configure",

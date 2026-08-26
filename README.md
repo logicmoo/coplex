@@ -4,6 +4,12 @@ SWI-Prolog Codex/Copilot-style coding-agent harness. One module,
 `codex_harness`, exposes object terms `codex_harness(Id)` with
 mutex-protected per-instance state.
 
+> For the complete system design (architecture diagrams, the agent
+> loop, the permission model, the REST/UI contract, plugin process
+> management, and the test suites), see [`docs/`](docs/README.md).
+> This README stays a quickstart/reference; `FEATURE_GUIDE.md` covers
+> extension points and known pitfalls.
+
 ## Load
 
 ```prolog
