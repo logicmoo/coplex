@@ -101,6 +101,7 @@ test(create_run_snapshot_delete, [setup(setup_server), cleanup(teardown_server)]
     http_get_json(ItemUrl, _{}, Snap),
     assertion(Snap.ok == true),
     assertion(Snap.iteration >= 0),
+    assertion(Snap.created_at > 0),
     format(atom(MsgUrl), '~w/harnesses/~w/messages', [Base, Id]),
     http_get_json(MsgUrl, _{}, MsgReply),
     assertion(is_list(MsgReply.messages)),
@@ -108,6 +109,53 @@ test(create_run_snapshot_delete, [setup(setup_server), cleanup(teardown_server)]
     assertion(DelReply.ok == true),
     http_get_json(HarnessesUrl, _{}, ListReply),
     assertion(\+ memberchk(Id, ListReply.ids)).
+
+test(harnesses_list_has_summaries, [setup(setup_server), cleanup(teardown_server)]) :-
+    % GET /harnesses must return a lightweight per-harness summary
+    % (running/current_task/message_count/...) alongside the plain id
+    % list, so a UI can render a dashboard table without an extra
+    % request per row.
+    base_url(Base),
+    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    http_post_json(HarnessesUrl, _{root:".", adapter:"scripted"}, Created),
+    Id = Created.id,
+    http_get_json(HarnessesUrl, _{}, ListReply),
+    assertion(is_list(ListReply.harnesses)),
+    summary_for_id(ListReply.harnesses, Id, Summary),
+    assertion(Summary.running == false),
+    assertion(Summary.message_count == 0),
+    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    http_delete_json(ItemUrl, _).
+
+summary_for_id([D|_], Id, D) :- D.id == Id, !.
+summary_for_id([_|Ds], Id, Summary) :- summary_for_id(Ds, Id, Summary).
+
+test(async_run_completes_in_background, [setup(setup_server), cleanup(teardown_server)]) :-
+    base_url(Base),
+    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    http_post_json(HarnessesUrl,
+                   _{root:".", adapter:"scripted",
+                     mock_replies:[_{content:"async hi", tool_calls:[]}]},
+                   Created),
+    Id = Created.id,
+    format(atom(RunUrl), '~w/harnesses/~w/run', [Base, Id]),
+    http_post_json(RunUrl, _{task:"say hi", async:true}, RunReply),
+    assertion(RunReply.ok == true),
+    assertion(RunReply.started == true),
+    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    wait_run_finished(ItemUrl, 100, Snap),
+    assertion(Snap.last_answer == "async hi"),
+    http_delete_json(ItemUrl, _).
+
+wait_run_finished(_, 0, _) :- !, fail.
+wait_run_finished(Url, N, Snap) :-
+    http_get_json(Url, _{}, Snap0),
+    (   Snap0.running == false, Snap0.last_answer \== ""
+    ->  Snap = Snap0
+    ;   sleep(0.05),
+        N1 is N - 1,
+        wait_run_finished(Url, N1, Snap)
+    ).
 
 test(unknown_harness_is_404, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
@@ -148,5 +196,33 @@ test(goal_shaped_options_are_ignored, [setup(setup_server), cleanup(teardown_ser
     http_get_json(ItemUrl, _{}, Snap),
     assertion(Snap.ok == true),
     http_delete_json(ItemUrl, _).
+
+test(cors_preflight_and_headers, [setup(setup_server), cleanup(teardown_server)]) :-
+    % A browser-based UI on another origin sends an OPTIONS preflight
+    % before its real POST/DELETE; the server must answer 200 with
+    % Access-Control-Allow-Origin, and normal replies must carry the
+    % same header so the browser doesn't block reading the response.
+    base_url(Base),
+    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    setup_call_cleanup(
+        http_open(HarnessesUrl, In,
+                   [ method(options),
+                     status_code(PreCode),
+                     header(access_control_allow_origin, PreOrigin)
+                   ]),
+        true,
+        close(In)),
+    assertion(PreCode == 200),
+    assertion(PreOrigin == '*'),
+    format(atom(HealthUrl), '~w/health', [Base]),
+    setup_call_cleanup(
+        http_open(HealthUrl, In2,
+                   [ status_code(GetCode),
+                     header(access_control_allow_origin, GetOrigin)
+                   ]),
+        true,
+        close(In2)),
+    assertion(GetCode == 200),
+    assertion(GetOrigin == '*').
 
 :- end_tests(codex_harness_server).

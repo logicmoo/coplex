@@ -14,7 +14,7 @@
     own file avoids that trap entirely.
 
     Usage:
-        swipl codex_harness_server_main.pl --port=8798 --host=localhost
+        swipl codex_harness_server_main.pl --port=8840 --host=localhost
 */
 
 :- use_module(codex_harness_server).
@@ -37,7 +37,7 @@ block_forever :-
     fail.
 
 parse_argv(Argv, Port, Host) :-
-    ( arg_value(Argv, '--port', PortA) -> atom_number(PortA, Port) ; Port = 8798 ),
+    ( arg_value(Argv, '--port', PortA) -> atom_number(PortA, Port) ; Port = 8840 ),
     ( arg_value(Argv, '--host', HostA) -> Host = HostA ; Host = localhost ).
 
 arg_value(Argv, Flag, Value) :-

@@ -43,6 +43,23 @@ is now exposed over HTTP:
   security model (fixed option allowlist; goal-shaped options like
   `approval`/`on_event`/`web_search_backend` are never accepted from
   JSON).
+- **Endpoints for a management web UI**: `GET /harnesses` returns a
+  `harnesses` array of `harness_summary/2` dicts (running,
+  current_task, message/tool-call counts, created_at) alongside the
+  plain `ids`, so a dashboard can list every live agent with one
+  request. `POST /harnesses/<id>/run` accepts `{"async": true}` to
+  return immediately (`{ok:true, started:true}`) while the run
+  continues in a background thread (`harness_run_async/3` in
+  `codex_harness.pl`, which shares its timeout/error handling with the
+  synchronous path via `run_body/4`); a UI polls `GET
+  /harnesses/<id>`/the list above for `running` to flip back to
+  `false`. A second concurrent run on the same harness is rejected
+  with HTTP 409 (`guard_not_running/1`) instead of corrupting shared
+  state. CORS (`library(http/http_cors)`) is enabled by default for any
+  origin — including `OPTIONS` preflight — via
+  `TASK_HARNESS_CORS_ORIGIN` (comma-separated origins, default `*`,
+  `""` disables it), so a browser UI on a different origin/dev-server
+  port needs no proxy.
 - The runnable entry point lives in a separate file,
   `codex_harness_server_main.pl` — *not* in `codex_harness_server.pl`
   itself — because `:- initialization(Goal, main)` fires on plain
@@ -56,7 +73,10 @@ is now exposed over HTTP:
 - A remaining idea, not yet done: a CLI/REPL loop calling
   `harness_run/3` directly in-process for local scripting (as opposed
   to the REST API) — still worth adding if useful, but the REST layer
-  now covers the "workbench can puppet us" requirement.
+  now covers the "workbench can puppet us" requirement. Also not done:
+  a push-based progress channel (SSE/WebSocket) — polling `GET
+  /harnesses/<id>` covers it for now, but would cut the poll latency
+  for a busier UI if ever needed.
 - Keep any *new* UI in its own file that depends on `codex_harness`
   (as `codex_harness_server.pl` already does) — don't fold UI/network
   code into the core module.

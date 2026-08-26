@@ -4,10 +4,12 @@
             harness_close/1,
             harness_run/3,
             harness_run/4,
+            harness_run_async/3,
             harness_cancel/1,
             harness_reset/1,
             harness_messages/2,
             harness_snapshot/2,
+            harness_summary/2,
             harness_tool/4,
             harness_tool_specs/1,
             harness_list/1,
@@ -245,7 +247,32 @@ harness_snapshot(codex_harness(Id), Snap) :-
         tool_activity:S.tool_activity,
         subagents:S.subagents,
         last_answer:S.last_answer,
-        last_error:S.last_error
+        last_error:S.last_error,
+        created_at:S.created_at
+    }.
+
+%!  harness_summary(+Harness, -Summary) is det.
+%
+%   Lightweight per-harness status, sized for list/dashboard views
+%   (e.g. a web UI rendering a table of running agents): unlike
+%   harness_snapshot/2 it carries message/tool-activity *counts*
+%   rather than the full histories, so listing many harnesses stays
+%   cheap.
+harness_summary(codex_harness(Id), Summary) :-
+    state(Id, S),
+    length(S.messages, MessageCount),
+    length(S.tool_activity, ToolCallCount),
+    Summary = _{
+        id:S.id,
+        current_task:S.current_task,
+        iteration:S.iteration,
+        running:S.running,
+        cancelled:S.cancelled,
+        last_answer:S.last_answer,
+        last_error:S.last_error,
+        message_count:MessageCount,
+        tool_call_count:ToolCallCount,
+        created_at:S.created_at
     }.
 
 %!  harness_run(+Harness, +Task, -Answer) is det.
@@ -253,17 +280,60 @@ harness_run(H, Task, Answer) :-
     harness_run(H, Task, [], Answer).
 
 %!  harness_run(+Harness, +Task, +RunOptions, -Answer) is det.
+%
+%   Run Task to completion and unify Answer with the final answer.
+%   Blocks the calling thread for the duration of the run (up to the
+%   harness's timeout/1 option) -- see harness_run_async/3 for a
+%   non-blocking alternative suited to a UI that wants to poll or
+%   stream progress instead of holding a connection open.
 harness_run(codex_harness(Id), Task, RunOptions, Answer) :-
     must_be(list, RunOptions),
+    guard_not_running(Id),
+    mutate(Id, start_run(Task)),
+    run_body(Id, Task, RunOptions, Answer),
+    mutate(Id, finish_run(Answer)).
+
+%!  harness_run_async(+Harness, +Task, +RunOptions) is det.
+%
+%   Like harness_run/4, but returns immediately after marking the
+%   harness as running/1=true; the agent loop executes to completion
+%   in a separate detached thread.  Callers observe progress and the
+%   eventual answer via harness_snapshot/2 (running, last_answer,
+%   last_error, iteration) or harness_messages/2 -- this is the
+%   non-blocking shape a REST-driven web UI needs so a "run" click
+%   doesn't have to hold an HTTP request open for the whole agent
+%   loop.  Throws permission_error(start, harness_run, already_running)
+%   if this harness is already mid-run.
+harness_run_async(codex_harness(Id), Task, RunOptions) :-
+    must_be(list, RunOptions),
+    guard_not_running(Id),
+    mutate(Id, start_run(Task)),
+    thread_create(
+        ( run_body(Id, Task, RunOptions, Answer),
+          mutate(Id, finish_run(Answer))
+        ),
+        _,
+        [detached(true)]).
+
+guard_not_running(Id) :-
+    state(Id, S),
+    (   S.running == true
+    ->  throw(error(permission_error(start, harness_run, already_running), _))
+    ;   true
+    ).
+
+%!  run_body(+Id, +Task, +RunOptions, -Answer) is det.
+%   Shared timeout/error-handling wrapper around run_loop/4, used by
+%   both the synchronous and async run entry points. Does not touch
+%   the running/1 flag; callers are responsible for start_run/finish_run.
+run_body(Id, Task, RunOptions, Answer) :-
     state(Id, S0),
     Timeout is max(1, S0.timeout),
-    mutate(Id, start_run(Task)),
     catch(call_with_time_limit(
               Timeout,
               run_loop(Id, Task, RunOptions, Answer)),
           Error,
-          handle_run_error(Id, Error, Answer)),
-    mutate(Id, finish_run(Answer)).
+          handle_run_error(Id, Error, Answer)).
 
 handle_run_error(Id, time_limit_exceeded, Answer) :-
     !,

@@ -51,7 +51,7 @@ TEST_SUITE = "test_codex_harness.pl"
 PLUGIN_DIR = Path(__file__).resolve().parent
 STATE_FILE = PLUGIN_DIR / ".harness_server_state.json"
 
-DEFAULT_PORT = 8798
+DEFAULT_PORT = 8840
 DEFAULT_HOST = "localhost"
 START_TIMEOUT_SECONDS = 10
 HEALTH_POLL_INTERVAL = 0.2
@@ -377,6 +377,8 @@ def config() -> dict:
             "default_port": DEFAULT_PORT,
             "host_env": "TASK_HARNESS_HOST",
             "port_env": "TASK_HARNESS_PORT",
+            "cors_origin_env": "TASK_HARNESS_CORS_ORIGIN",
+            "cors_origin_default": "*",
         },
         "endpoints": [
             "GET    /health",
@@ -392,6 +394,19 @@ def config() -> dict:
             "POST   /harnesses/<id>/tools/<name>",
             "POST   /shutdown",
         ],
+        "ui_notes": (
+            "GET /harnesses returns both 'ids' and a lightweight 'harnesses' summary list "
+            "(running/current_task/iteration/last_answer/last_error/message_count/"
+            "tool_call_count/created_at) so a dashboard can render a table with one request. "
+            "POST /harnesses/<id>/run blocks until the run finishes by default; pass "
+            "{'async': true} to get an immediate {ok, started:true} reply while the run "
+            "continues in a background thread, then poll GET /harnesses/<id> (or the list "
+            "above) for 'running' to flip back to false. A run request while one is already "
+            "in flight is rejected with HTTP 409. CORS is enabled by default (any origin) so "
+            "a browser-based UI can call this API directly; restrict it with "
+            "TASK_HARNESS_CORS_ORIGIN (comma-separated origins, or '' to disable) for anything "
+            "beyond local development."
+        ),
         "harness_new_options": {
             "root": "string, repository root (default '.')",
             "cwd": "string, working directory (default = root)",

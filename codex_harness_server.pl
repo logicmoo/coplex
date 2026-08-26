@@ -15,7 +15,7 @@ declared in plugin.json: it lets the workbench "puppet" this plugin.
 
 Run standalone for manual testing:
 
-    swipl codex_harness_server_main.pl --port=8798 --host=localhost
+    swipl codex_harness_server_main.pl --port=8840 --host=localhost
 
 This module is a plain library: loading it with use_module/1 never
 starts a server or blocks a thread.  The `codex_harness_server_main.pl`
@@ -52,6 +52,36 @@ functor:
   * The server binds to `localhost` by default; pass a different
     `--host` only if the workbench genuinely runs in a different
     network namespace from this plugin.
+  * CORS is enabled (Access-Control-Allow-Origin) so a browser-based
+    web UI can call this API directly, since that is the whole point
+    of exposing a REST surface for "someone to design a UI around".
+    This is safe *because* the server only binds to localhost by
+    default -- a remote page can still reach it via a victim's
+    browser, so set `TASK_HARNESS_CORS_ORIGIN` to a specific origin
+    (or the empty string to disable CORS entirely) instead of the
+    default `*` wildcard for anything beyond local development.
+
+## Endpoints for a management UI
+
+Every mutating action a UI needs is a plain REST call, and every piece
+of state it needs to render is a plain REST read -- nothing requires
+an open connection or a Prolog client:
+
+  * `POST /harnesses/<id>/run` blocks until the agent loop finishes by
+    default. Pass `{"async": true}` in the body instead to get an
+    immediate `{ok:true, started:true}` reply while the run continues
+    in a background thread; poll `GET /harnesses/<id>` (or the lighter
+    `GET /harnesses` list) for `running`/`last_answer`/`last_error` to
+    know when it's done. A second `run` while one is already in flight
+    is rejected with HTTP 409 rather than corrupting shared state.
+  * `GET /harnesses` returns both `ids` (unchanged, for existing
+    callers) and `harnesses`, a list of lightweight per-harness status
+    dicts (`running`, `current_task`, `iteration`, `last_answer`,
+    `last_error`, `message_count`, `tool_call_count`, `created_at`) --
+    enough to render a dashboard table without an extra request per
+    row.
+  * `GET /harnesses/<id>` returns the full snapshot (same fields plus
+    the complete `messages`/`tool_activity` history) for a detail view.
 
 @see codex_harness.pl, README.md, FEATURE_GUIDE.md
 */
@@ -61,12 +91,35 @@ functor:
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_json)).
 :- use_module(library(http/json)).
+:- use_module(library(http/http_cors)).
 :- use_module(library(apply)).
 :- use_module(library(lists)).
 :- use_module(library(error)).
 :- use_module(library(debug)).
+:- use_module(library(settings)).
 
 :- dynamic running_port/1.
+
+%   CORS is on by default (any origin) so a browser-based web UI can
+%   call this API straight from JavaScript without a proxy; this is a
+%   deliberate trade-off documented in the module docstring above.
+%   Override with the TASK_HARNESS_CORS_ORIGIN environment variable:
+%   a comma-separated list of allowed origins, or "" to disable CORS.
+:- initialization(configure_cors).
+
+configure_cors :-
+    (   getenv('TASK_HARNESS_CORS_ORIGIN', Raw)
+    ->  true
+    ;   Raw = "*"
+    ),
+    cors_origin_list(Raw, Origins),
+    set_setting(http:cors, Origins).
+
+cors_origin_list("", []) :- !.
+cors_origin_list(Raw, Origins) :-
+    split_string(Raw, ",", " ", Parts0),
+    exclude(==(""), Parts0, Parts),
+    maplist(atom_string, Origins, Parts).
 
 %   Declared meta_predicate (before any use) so that dict functional
 %   notation (e.g. `Snap.put(ok, true)`) embedded in a caller's Goal
@@ -75,10 +128,10 @@ functor:
 :- meta_predicate with_existing_harness(+, 0).
 :- meta_predicate with_json_body(+, -, 0).
 
-:- http_handler('/health', health_handler, [methods([get])]).
-:- http_handler('/shutdown', shutdown_handler, [methods([post])]).
-:- http_handler('/tools', tools_handler, [methods([get])]).
-:- http_handler('/harnesses', harnesses_collection, [methods([get,post])]).
+:- http_handler('/health', health_handler, [methods([get,options])]).
+:- http_handler('/shutdown', shutdown_handler, [methods([post,options])]).
+:- http_handler('/tools', tools_handler, [methods([get,options])]).
+:- http_handler('/harnesses', harnesses_collection, [methods([get,post,options])]).
 :- http_handler('/harnesses/', harnesses_item, [prefix]).
 
 %!  server_start(+Port, +Host) is det.
@@ -108,22 +161,37 @@ server_stop :-
 /* handlers                                                         */
 /* --------------------------------------------------------------- */
 
-health_handler(_Request) :-
-    reply_json_dict(_{ok:true, service:"task_harness_pl"}).
+health_handler(Request) :-
+    ( memberchk(method(options), Request)
+    ->  cors_enable(Request, [methods([get])]),
+        format('~n')
+    ;   cors_enable,
+        reply_json_dict(_{ok:true, service:"task_harness_pl"})
+    ).
 
-shutdown_handler(_Request) :-
-    reply_json_dict(_{ok:true, message:"shutting down"}),
-    thread_create(delayed_halt, _, [detached(true)]).
+shutdown_handler(Request) :-
+    ( memberchk(method(options), Request)
+    ->  cors_enable(Request, [methods([post])]),
+        format('~n')
+    ;   cors_enable,
+        reply_json_dict(_{ok:true, message:"shutting down"}),
+        thread_create(delayed_halt, _, [detached(true)])
+    ).
 
 delayed_halt :-
     sleep(0.2),
     server_stop,
     halt(0).
 
-tools_handler(_Request) :-
-    harness_tool_specs(Specs),
-    maplist(spec_dict, Specs, Dicts),
-    reply_json_dict(_{ok:true, tools:Dicts}).
+tools_handler(Request) :-
+    ( memberchk(method(options), Request)
+    ->  cors_enable(Request, [methods([get])]),
+        format('~n')
+    ;   cors_enable,
+        harness_tool_specs(Specs),
+        maplist(spec_dict, Specs, Dicts),
+        reply_json_dict(_{ok:true, tools:Dicts})
+    ).
 
 spec_dict(spec(Name, Risk, Desc, Schema),
           _{name:Name, risk:Risk, description:Desc, schema:Schema}).
@@ -132,21 +200,35 @@ harnesses_collection(Request) :-
     memberchk(method(Method), Request),
     harnesses_collection_(Method, Request).
 
+harnesses_collection_(options, Request) :- !,
+    cors_enable(Request, [methods([get,post])]),
+    format('~n').
 harnesses_collection_(get, _Request) :-
+    cors_enable,
     harness_list(Ids),
-    reply_json_dict(_{ok:true, ids:Ids}).
+    maplist(list_summary, Ids, Summaries),
+    reply_json_dict(_{ok:true, ids:Ids, harnesses:Summaries}).
 harnesses_collection_(post, Request) :-
+    cors_enable,
     with_json_body(Request, Body,
         ( dict_options(Body, Options),
           harness_new(Options, codex_harness(Id)),
           reply_json_dict(_{ok:true, id:Id})
         )).
 
+list_summary(Id, Summary) :-
+    harness_summary(codex_harness(Id), Summary).
+
 harnesses_item(Request) :-
-    memberchk(path(Path), Request),
     memberchk(method(Method), Request),
-    path_segments_after('/harnesses/', Path, Segments),
-    dispatch_item(Segments, Method, Request).
+    ( Method == options
+    ->  cors_enable(Request, [methods([get,post,delete])]),
+        format('~n')
+    ;   cors_enable,
+        memberchk(path(Path), Request),
+        path_segments_after('/harnesses/', Path, Segments),
+        dispatch_item(Segments, Method, Request)
+    ).
 
 path_segments_after(Prefix, Path, Segments) :-
     atom_concat(Prefix, Rest, Path),
@@ -171,8 +253,13 @@ dispatch_item([IdS, "run"], post, Request) :- !,
         with_json_body(Request, Body,
             ( flex_task_text(Body, Task),
               flex_run_options(Body, RunOptions),
-              harness_run(codex_harness(Id), Task, RunOptions, Answer),
-              reply_json_dict(_{ok:true, answer:Answer})
+              flex_async_flag(Body, Async),
+              (   Async == true
+              ->  harness_run_async(codex_harness(Id), Task, RunOptions),
+                  reply_json_dict(_{ok:true, id:Id, started:true, async:true})
+              ;   harness_run(codex_harness(Id), Task, RunOptions, Answer),
+                  reply_json_dict(_{ok:true, answer:Answer})
+              )
             ))).
 dispatch_item([IdS, "cancel"], post, _Request) :- !,
     atom_string(Id, IdS),
@@ -209,7 +296,7 @@ dispatch_item(_Segments, _Method, _Request) :-
 
 with_existing_harness(Id, Goal) :-
     (   harness_known(Id)
-    ->  catch(Goal, Error, reply_error(500, Error))
+    ->  catch(Goal, Error, (error_status(Error, Code), reply_error(Code, Error)))
     ;   reply_error(404, error(existence_error(codex_harness, Id), _))
     ).
 
@@ -220,13 +307,26 @@ harness_known(Id) :-
 with_json_body(Request, Body, Goal) :-
     catch(http_read_json_dict(Request, Body0), _, Body0 = _{}),
     ( is_dict(Body0) -> Body = Body0 ; Body = _{} ),
-    catch(Goal, Error, reply_error(500, Error)).
+    catch(Goal, Error, (error_status(Error, Code), reply_error(Code, Error))).
+
+%!  error_status(+Error, -HttpCode) is det.
+%   Maps a caught Prolog error term to the HTTP status code a REST
+%   client should see. Anything not recognised falls back to 500.
+error_status(error(permission_error(start, harness_run, already_running), _), 409) :- !.
+error_status(_, 500).
 
 flex_task_text(Body, Task) :-
     ( get_dict(task, Body, T) -> Task = T ; Task = "" ).
 
 flex_run_options(Body, Options) :-
     ( get_dict(context, Body, Ctx) -> Options = [context(Ctx)] ; Options = [] ).
+
+%!  flex_async_flag(+Body, -Async) is det.
+%   Async is `true` only when the request body explicitly asked for
+%   it (`{"async": true}`); anything else -- absent, false, or any
+%   other JSON value -- keeps the default blocking behaviour.
+flex_async_flag(Body, Async) :-
+    ( get_dict(async, Body, V), V == true -> Async = true ; Async = false ).
 
 reply_error(Code, Error) :-
     message_to_string_safe(Error, Msg),

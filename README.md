@@ -102,7 +102,7 @@ library (loading it never starts a server); `codex_harness_server_main.pl`
 is the runnable entry point:
 
 ```
-swipl codex_harness_server_main.pl --port=8798 --host=localhost
+swipl codex_harness_server_main.pl --port=8840 --host=localhost
 ```
 
 `plugin.py` manages this as a background subprocess through the plugin
@@ -116,19 +116,55 @@ Endpoints (JSON in, JSON out):
 |--------|-------------------------------|---------------------------------------------|
 | GET    | `/health`                     | Liveness check.                              |
 | GET    | `/tools`                      | `harness_tool_specs/1`.                      |
-| GET    | `/harnesses`                  | `harness_list/1` -- currently live ids.      |
+| GET    | `/harnesses`                  | `harness_list/1` ids, plus a `harnesses` array of `harness_summary/2` status dicts (see below). |
 | POST   | `/harnesses`                  | `harness_new/2` (safe option subset below).  |
 | GET    | `/harnesses/<id>`             | `harness_snapshot/2`.                        |
 | DELETE | `/harnesses/<id>`             | `harness_close/1`.                           |
-| POST   | `/harnesses/<id>/run`         | `harness_run/4`; body `{task, context?}`.    |
+| POST   | `/harnesses/<id>/run`         | `harness_run/4`; body `{task, context?, async?}`. |
 | POST   | `/harnesses/<id>/cancel`      | `harness_cancel/1`.                          |
 | POST   | `/harnesses/<id>/reset`       | `harness_reset/1`.                           |
 | GET    | `/harnesses/<id>/messages`    | `harness_messages/2`.                        |
 | POST   | `/harnesses/<id>/tools/<name>`| `harness_tool/4`; body is the tool's Arguments.|
 | POST   | `/shutdown`                   | Graceful self-terminate (replies, then halts).|
 
-Unknown/nonexistent harness ids return HTTP 404; internal errors
+Unknown/nonexistent harness ids return HTTP 404; a `run` request against
+a harness that's already running returns HTTP 409; internal errors
 return HTTP 500 with `{"ok": false, "error": "..."}`.
+
+### Building a UI around this API
+
+`POST /harnesses/<id>/run` blocks until the agent loop finishes by
+default -- fine for scripts, awkward for a web UI that wants to render
+progress. Pass `{"async": true}` in the body instead:
+
+```
+POST /harnesses/<id>/run  {"task": "...", "async": true}
+-> {"ok": true, "id": "...", "started": true, "async": true}
+```
+
+The run then continues in a background thread; poll `GET
+/harnesses/<id>` (or the lighter list below) until `running` flips back
+to `false`, then read `last_answer`/`last_error`. A second `run` while
+one is already in flight is rejected with HTTP 409 instead of
+corrupting shared state, so a UI's "run" button can safely no-op on a
+double click.
+
+`GET /harnesses` returns both the original `ids` array and a
+`harnesses` array of `harness_summary/2` dicts -- `id`, `current_task`,
+`iteration`, `running`, `cancelled`, `last_answer`, `last_error`,
+`message_count`, `tool_call_count`, `created_at` -- so a dashboard can
+render a table of every live harness with one request instead of one
+per row. `GET /harnesses/<id>` still returns the full
+`harness_snapshot/2` (same fields plus the complete `messages` and
+`tool_activity` history) for a detail view.
+
+CORS (`Access-Control-Allow-Origin`) is enabled by default for any
+origin, including the `OPTIONS` preflight every browser sends before a
+cross-origin `POST`/`DELETE`, so a UI served from a different origin
+(e.g. a Vite/webpack dev server) can call this API directly with no
+proxy. Set `TASK_HARNESS_CORS_ORIGIN` to a comma-separated list of
+allowed origins, or to `""` to disable CORS entirely, for anything
+beyond local development.
 
 **Security model.** The server binds to `localhost` by default. Request
 bodies are never parsed as Prolog source and never used to build a
@@ -150,6 +186,10 @@ callable term:
   unified against `dispatch_tool/5`'s fixed clause table (see
   `codex_harness.pl`), so an unknown/attacker-chosen name can never
   resolve to an arbitrary predicate.
+- CORS defaults to `*` (any origin), which is safe *only* because the
+  server binds to `localhost` by default; tighten
+  `TASK_HARNESS_CORS_ORIGIN` if that default host binding is ever
+  changed.
 
 Tests: `swipl -g run_tests -t halt test_codex_harness_server.pl` (spins
 up a real server on an ephemeral localhost port and drives it with
@@ -170,5 +210,6 @@ Example: `swipl -s example_codex_harness.pl -t halt`.
 - Unified-diff parser handles standard `---`/`+++`/`@@` hunks, not git
   binary patches or rename headers.
 - `web_search` requires an injected `web_search_backend/2` goal.
-- No large UI beyond the REST API above. `harness_snapshot/2` is the
-  observation surface; `GET /harnesses/<id>` exposes it over HTTP.
+- No bundled UI: the REST API above (async run, list summaries, CORS)
+  is designed to be driven by a separately-built web UI, not to ship
+  one itself.

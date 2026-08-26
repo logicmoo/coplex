@@ -59,7 +59,7 @@
     "config": "config",
     "restart": "restart",
     "shutdown": "shutdown",
-    "note": "Implemented in plugin.py, backed by the REST server in codex_harness_server.pl (routePrefix informational only -- the server listens directly on its own host:port, default http://localhost:8798, overridable via TASK_HARNESS_HOST/TASK_HARNESS_PORT). status reports swipl/server health; config describes the REST endpoints and the safe harness_new/2 option subset the server accepts from JSON; restart stops and relaunches the server subprocess; shutdown stops it. See README.md's REST API section for the full endpoint list and the security model (no request body is ever parsed as Prolog code or used to construct a callable)."
+    "note": "Implemented in plugin.py, backed by the REST server in codex_harness_server.pl (routePrefix informational only -- the server listens directly on its own host:port, default http://localhost:8840, overridable via TASK_HARNESS_HOST/TASK_HARNESS_PORT). status reports swipl/server health; config describes the REST endpoints and the safe harness_new/2 option subset the server accepts from JSON; restart stops and relaunches the server subprocess; shutdown stops it. See README.md's REST API section for the full endpoint list and the security model (no request body is ever parsed as Prolog code or used to construct a callable)."
   },
   "ui": {
     "pages": [
