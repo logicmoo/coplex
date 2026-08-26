@@ -1,2 +1,3 @@
 __pycache__/
 *.pyc
+.harness_server_state.json

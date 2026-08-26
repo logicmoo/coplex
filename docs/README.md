@@ -19,6 +19,16 @@ and known pitfalls, see `../FEATURE_GUIDE.md`. This folder explains
 | 5 | [05-plugin-integration.md](05-plugin-integration.md) | `plugin.json` + `plugin.py`: lifecycle hooks, subprocess supervision, environment variables, and the manual CLI. |
 | 6 | [06-testing.md](06-testing.md) | The two plunit test suites, what each test actually protects against, and how to run them. |
 
+## Learning this by doing it: the curriculum track
+
+If you want to understand *how Codex/Copilot-style coding agents work
+in general* -- not just how this specific codebase is laid out -- see
+[`curriculum/README.md`](curriculum/README.md): a hands-on teaching
+track (no API key required) covering the agent loop, tool calling,
+file editing, planning/todo tracking, MCP, and multi-agent
+orchestration, with every concept tied to real, runnable code in this
+repository.
+
 ## One-paragraph mental model
 
 A **harness** is a single Prolog object term `codex_harness(Id)` whose

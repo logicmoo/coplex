@@ -9,7 +9,9 @@ mutex-protected per-instance state.
 > loop, the permission model, the REST/UI contract, plugin process
 > management, and the test suites), see [`docs/`](docs/README.md).
 > This README stays a quickstart/reference; `FEATURE_GUIDE.md` covers
-> extension points and known pitfalls.
+> extension points and known pitfalls. New to how coding agents work
+> at all? Start with [`docs/curriculum/`](docs/curriculum/README.md)
+> instead -- a hands-on teaching track, no API key required.
 
 ## Layout
 
