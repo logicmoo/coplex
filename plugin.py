@@ -68,6 +68,7 @@ HEALTH_POLL_INTERVAL = 0.2
 REST_ENDPOINTS = [
     "GET    /health",
     "GET    /tools",
+    "POST   /tools/<name>",
     "GET    /harnesses",
     "POST   /harnesses",
     "GET    /harnesses/<id>",
@@ -442,7 +443,10 @@ def config() -> dict:
             "in flight is rejected with HTTP 409. CORS is enabled by default (any origin) so "
             "a browser-based UI can call this API directly; restrict it with "
             "COPLEX_CORS_ORIGIN (comma-separated origins, or '' to disable) for anything "
-            "beyond local development."
+            "beyond local development. Each GET /tools entry carries a real 'method'/"
+            "'endpoint' (POST /coplex/tools/<name>) that a UI can call directly against a "
+            "shared, lazily-created harness -- no need to create/manage a harness id just to "
+            "run one tool."
         ),
         "harness_new_options": {
             "root": "string, repository root (default '.')",

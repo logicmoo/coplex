@@ -46,10 +46,11 @@ functor:
   * `adapter` is normalised to one of the two built-in atoms
     `scripted` or `mock`; any other value is silently mapped to
     `scripted` rather than passed through.
-  * Tool names arriving on the URL (`POST /harnesses/<Id>/tools/<Name>`)
-    are only ever unified against codex_harness's fixed
-    `dispatch_tool/5` clause table, so an unknown/attacker-chosen name
-    can never resolve to an arbitrary predicate.
+  * Tool names arriving on the URL (`POST /harnesses/<Id>/tools/<Name>`
+    or the harness-less `POST /tools/<Name>`) are only ever unified
+    against codex_harness's fixed `dispatch_tool/5` clause table, so an
+    unknown/attacker-chosen name can never resolve to an arbitrary
+    predicate.
   * The server binds to `localhost` by default; pass a different
     `--host` only if the workbench genuinely runs in a different
     network namespace from this plugin.
@@ -83,6 +84,10 @@ an open connection or a Prolog client:
     row.
   * `GET /harnesses/<id>` returns the full snapshot (same fields plus
     the complete `messages`/`tool_activity` history) for a detail view.
+  * `GET /tools` advertises a real, working `method` + `endpoint` for
+    every tool (`POST /coplex/tools/<name>`) backed by a shared,
+    lazily-created harness, for callers that just want to run one tool
+    without first managing a harness's lifecycle.
 
 @see prolog/coplex/codex_harness.pl, README.md, FEATURE_GUIDE.md
 */
@@ -135,12 +140,14 @@ cors_origin_list(Raw, Origins) :-
 :- http_handler('/health', health_handler, [methods([get,options])]).
 :- http_handler('/shutdown', shutdown_handler, [methods([post,options])]).
 :- http_handler('/tools', tools_handler, [methods([get,options])]).
+:- http_handler('/tools/', direct_tool_item, [prefix]).
 :- http_handler('/harnesses', harnesses_collection, [methods([get,post,options])]).
 :- http_handler('/harnesses/', harnesses_item, [prefix]).
 :- http_handler('/coplex', coplex_status_handler, [methods([get,options])]).
 :- http_handler('/coplex/health', health_handler, [methods([get,options])]).
 :- http_handler('/coplex/shutdown', shutdown_handler, [methods([post,options])]).
 :- http_handler('/coplex/tools', tools_handler, [methods([get,options])]).
+:- http_handler('/coplex/tools/', direct_tool_item, [prefix]).
 :- http_handler('/coplex/harnesses', harnesses_collection, [methods([get,post,options])]).
 :- http_handler('/coplex/harnesses/', harnesses_item, [prefix]).
 
@@ -215,6 +222,7 @@ swipl_version_string(Version) :-
 rest_endpoints([
     "GET    /health",
     "GET    /tools",
+    "POST   /tools/<name>",
     "GET    /harnesses",
     "POST   /harnesses",
     "GET    /harnesses/<id>",
@@ -251,8 +259,74 @@ tools_handler(Request) :-
         reply_json_dict(_{ok:true, tools:Dicts})
     ).
 
-spec_dict(spec(Name, Risk, Desc, Schema),
-          _{name:Name, risk:Risk, description:Desc, schema:Schema}).
+%!  spec_dict(+Spec, -Dict) is det.
+%
+%   Each tool advertises a *real, working* `method` + `endpoint` --
+%   `POST /coplex/tools/<name>` -- rather than leaving a UI to guess
+%   one from the bare tool name (which would produce a URL that
+%   matches no route at all). See direct_tool_item/1 for the handler
+%   backing that endpoint.
+spec_dict(spec(Name, Risk, Desc, Schema), Dict) :-
+    format(atom(Endpoint), '/coplex/tools/~w', [Name]),
+    Dict = _{name:Name, risk:Risk, description:Desc, schema:Schema,
+             method:"POST", endpoint:Endpoint}.
+
+%!  direct_tool_item(+Request) is det.
+%
+%   POST /tools/<name> (and its /coplex-prefixed parity route) --
+%   runs one named tool immediately, with no caller-managed harness
+%   id at all. Backed by a single lazily-created, shared harness (see
+%   ensure_default_harness/1) built from harness_new/2's plain
+%   defaults, i.e. exactly what `POST /harnesses` with an empty body
+%   would create: root ".", allow_shell/allow_network both false,
+%   allowed_tools all, approval none (so nothing blocks waiting on an
+%   external approval callback -- see codex_harness.pl's approve/4).
+%   An unknown tool name isn't a routing 404; like the per-harness
+%   route below, it comes back as an ordinary 200 reply with
+%   `{"ok":false, "error":{"type":"unknown_tool", ...}}` (see
+%   codex_harness.pl's known_or_dispatch/4).
+direct_tool_item(Request) :-
+    memberchk(method(Method), Request),
+    ( Method == options
+    ->  cors_enable(Request, [methods([post])]),
+        format('~n')
+    ;   cors_enable,
+        memberchk(path(Path), Request),
+        path_segments_after('/tools/', Path, Segments),
+        dispatch_direct_tool(Segments, Method, Request)
+    ).
+
+dispatch_direct_tool([NameS], post, Request) :- NameS \== "", !,
+    atom_string(Name, NameS),
+    with_json_body(Request, Body,
+        ( ensure_default_harness(Id),
+          harness_tool(codex_harness(Id), Name, Body, Result),
+          reply_json_dict(Result)
+        )).
+dispatch_direct_tool(_Segments, _Method, _Request) :-
+    reply_error(404, error(existence_error(http_route, not_found), _)).
+
+%!  ensure_default_harness(-Id) is det.
+%
+%   Get-or-create the singleton harness backing direct_tool_item/1.
+%   Guarded by a mutex so two first-use requests racing each other
+%   can't each create (and leak) their own default harness. Self-
+%   healing: if the default harness is ever deleted via
+%   `DELETE /harnesses/<id>`, the next direct call just creates a
+%   fresh one.
+:- dynamic default_harness_id/1.
+
+ensure_default_harness(Id) :-
+    with_mutex(coplex_default_harness, ensure_default_harness_(Id)).
+
+ensure_default_harness_(Id) :-
+    default_harness_id(Id),
+    harness_known(Id),
+    !.
+ensure_default_harness_(Id) :-
+    retractall(default_harness_id(_)),
+    harness_new([], codex_harness(Id)),
+    assertz(default_harness_id(Id)).
 
 harnesses_collection(Request) :-
     memberchk(method(Method), Request),

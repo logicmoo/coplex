@@ -154,7 +154,8 @@ Endpoints (JSON in, JSON out):
 | Method | Path                          | Behavior                                   |
 |--------|-------------------------------|---------------------------------------------|
 | GET    | `/health`                     | Liveness check.                              |
-| GET    | `/tools`                      | `harness_tool_specs/1`.                      |
+| GET    | `/tools`                      | `harness_tool_specs/1`, each entry annotated with a real `method`/`endpoint` (below). |
+| POST   | `/tools/<name>`               | `harness_tool/4` against a shared, lazily-created harness; body is the tool's Arguments. No harness id needed. |
 | GET    | `/harnesses`                  | `harness_list/1` ids, plus a `harnesses` array of `harness_summary/2` status dicts (see below). |
 | POST   | `/harnesses`                  | `harness_new/2` (safe option subset below).  |
 | GET    | `/harnesses/<id>`             | `harness_snapshot/2`.                        |
@@ -169,6 +170,31 @@ Endpoints (JSON in, JSON out):
 Unknown/nonexistent harness ids return HTTP 404; a `run` request against
 a harness that's already running returns HTTP 409; internal errors
 return HTTP 500 with `{"ok": false, "error": "..."}`.
+
+### Calling a tool directly
+
+`GET /tools` used to only return `name`/`risk`/`description`/`schema`,
+leaving a UI to guess a URL for "running" a tool -- which produced
+broken, non-routable URLs like `http://host:port/read_file`. Each
+entry now also carries the endpoint that actually works:
+
+```json
+{"name": "read_file", "risk": "read_only",
+ "description": "Read a UTF-8 file under the repository root.",
+ "schema": {"path": "string"},
+ "method": "POST", "endpoint": "/coplex/tools/read_file"}
+```
+
+`POST /tools/<name>` (equivalently `/coplex/tools/<name>`) runs that
+tool immediately against a single shared harness that's created lazily
+on first use with the same defaults as `POST /harnesses` with an empty
+body (`root: "."`, `allow_shell`/`allow_network` both `false`,
+`approval: none`). It's for callers that just want to run one tool
+without first creating and tearing down a harness; an unknown tool
+name still comes back as a normal `200` with
+`{"ok": false, "error": {"type": "unknown_tool", ...}}`, matching
+`POST /harnesses/<id>/tools/<name>`'s behavior.
+
 
 ### Building a UI around this API
 
@@ -221,10 +247,11 @@ callable term:
   `call/N`'s each of them -- accepting them from untrusted JSON would
   be a remote-code-execution vector. Set them only via a direct,
   in-process `harness_new/2` call.
-- Tool names on `POST /harnesses/<id>/tools/<name>` are only ever
-  unified against `dispatch_tool/5`'s fixed clause table (see
-  `codex_harness.pl`), so an unknown/attacker-chosen name can never
-  resolve to an arbitrary predicate.
+- Tool names on `POST /harnesses/<id>/tools/<name>` (and the
+  harness-less `POST /tools/<name>`) are only ever unified against
+  `dispatch_tool/5`'s fixed clause table (see `codex_harness.pl`), so
+  an unknown/attacker-chosen name can never resolve to an arbitrary
+  predicate.
 - CORS defaults to `*` (any origin), which is safe *only* because the
   server binds to `localhost` by default; tighten
   `COPLEX_CORS_ORIGIN` if that default host binding is ever

@@ -84,6 +84,61 @@ test(tools_nonempty, [setup(setup_server), cleanup(teardown_server)]) :-
     assertion(is_list(Reply.tools)),
     assertion(Reply.tools \== []).
 
+test(tools_advertise_real_endpoint, [setup(setup_server), cleanup(teardown_server)]) :-
+    % Every tool in the catalog must carry a method + endpoint that
+    % actually resolves to a route (see tool_endpoint_is_callable),
+    % not just a name a UI would have to guess a URL for.
+    base_url(Base),
+    atomic_list_concat([Base, '/tools'], Url),
+    http_get_json(Url, _{}, Reply),
+    spec_for_name(Reply.tools, "read_file", ReadFileSpec),
+    assertion(ReadFileSpec.method == "POST"),
+    assertion(ReadFileSpec.endpoint == "/coplex/tools/read_file").
+
+spec_for_name([D|_], Name, D) :- D.name == Name, !.
+spec_for_name([_|Ds], Name, Spec) :- spec_for_name(Ds, Name, Spec).
+
+test(tool_endpoint_is_callable, [setup(setup_server), cleanup(teardown_server)]) :-
+    % POST /tools/<name> must work with no harness id at all -- this
+    % is the endpoint GET /tools advertises for each entry.
+    base_url(Base),
+    atomic_list_concat([Base, '/tools/git_status'], Url),
+    http_post_json(Url, _{}, Reply),
+    assertion(Reply.ok == true),
+    assertion(Reply.tool == "git_status").
+
+test(direct_tool_endpoint_coplex_prefix, [setup(setup_server), cleanup(teardown_server)]) :-
+    % Same handler, reached through the /coplex-prefixed parity route.
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex/tools/git_status'], Url),
+    http_post_json(Url, _{}, Reply),
+    assertion(Reply.ok == true),
+    assertion(Reply.tool == "git_status").
+
+test(direct_tool_endpoint_unknown_tool_is_200, [setup(setup_server), cleanup(teardown_server)]) :-
+    % An unknown tool name is a normal JSON error reply, matching the
+    % existing per-harness POST /harnesses/<id>/tools/<name> behavior
+    % -- not a 404, since the route itself did match.
+    base_url(Base),
+    atomic_list_concat([Base, '/tools/does_not_exist'], Url),
+    http_post_json(Url, _{}, Reply),
+    assertion(Reply.ok == false),
+    assertion(Reply.error.type == "unknown_tool").
+
+test(direct_tool_endpoint_reuses_shared_harness, [setup(setup_server), cleanup(teardown_server)]) :-
+    % Two direct calls share one lazily-created harness rather than
+    % leaking a fresh one per request.
+    base_url(Base),
+    atomic_list_concat([Base, '/tools/git_status'], Url),
+    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    http_get_json(HarnessesUrl, _{}, Before),
+    length(Before.ids, NBefore),
+    http_post_json(Url, _{}, _),
+    http_post_json(Url, _{}, _),
+    http_get_json(HarnessesUrl, _{}, After),
+    length(After.ids, NAfter),
+    assertion(NAfter =< NBefore + 1).
+
 test(create_run_snapshot_delete, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
     atomic_list_concat([Base, '/harnesses'], HarnessesUrl),

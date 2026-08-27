@@ -20,7 +20,8 @@ swipl coplex_server_main.pl --port=8840 --host=localhost
 | Method | Path | Core predicate | Notes |
 |---|---|---|---|
 | GET | `/health` | — | Liveness check: `{"ok":true,"service":"coplex"}`. |
-| GET | `/tools` | `harness_tool_specs/1` | Static tool catalog. |
+| GET | `/tools` | `harness_tool_specs/1` | Static tool catalog; each entry also carries a real `method`/`endpoint` (see below). |
+| POST | `/tools/<name>` | `harness_tool/4` | Runs one tool against a shared, lazily-created harness — no harness id required. |
 | GET | `/harnesses` | `harness_list/1` + `harness_summary/2` | Returns **both** `ids` (plain list) and `harnesses` (array of lightweight status dicts). |
 | POST | `/harnesses` | `harness_new/2` | Body is a JSON object of options; only the safe allowlist (below) is honored. |
 | GET | `/harnesses/<id>` | `harness_snapshot/2` | Full detail: config-independent status plus complete `messages`/`tool_activity` history. |
@@ -37,7 +38,7 @@ swipl coplex_server_main.pl --port=8840 --host=localhost
 | Code | When |
 |---|---|
 | 200 | Success. |
-| 404 | Unknown/nonexistent harness id, or an unmatched route under `/harnesses/`. |
+| 404 | Unknown/nonexistent harness id, or an unmatched route under `/harnesses/` or `/tools/`. |
 | 409 | `POST .../run` while that harness is already running (`guard_not_running/1`'s `already_running` permission error). |
 | 500 | Any other internal error, `{"ok": false, "error": "<message string>"}`. |
 
@@ -45,6 +46,36 @@ Every status/error mapping funnels through one shared predicate,
 `error_status/2`, used by both `with_existing_harness/2` and
 `with_json_body/3` — so a caught error gets the same HTTP code
 regardless of which helper happened to catch it first.
+
+### Direct tool calls (`GET /tools` endpoint field)
+
+Before, `GET /tools` returned only `name`/`risk`/`description`/`schema`
+for each tool, so a UI wanting to invoke one had to invent a URL —
+which typically produced something that matched no route at all (e.g.
+a bare `http://host:port/read_file`, with no `/coplex` prefix and no
+`/tools/` segment). Every entry now also carries the endpoint that
+actually works:
+
+```json
+{"name": "read_file", "risk": "read_only", "schema": {"path": "string"},
+ "description": "Read a UTF-8 file under the repository root.",
+ "method": "POST", "endpoint": "/coplex/tools/read_file"}
+```
+
+`POST /tools/<name>` (`direct_tool_item/1`, mirrored at
+`/coplex/tools/<name>`) runs `harness_tool/4` against a single
+harness shared across all direct calls, created lazily on first use
+(`ensure_default_harness/1`) with plain `harness_new/2` defaults — the
+same as `POST /harnesses` with an empty body: `root: "."`,
+`allow_shell`/`allow_network` both `false`, `allowed_tools: all`,
+`approval: none` (so nothing blocks waiting on an external approval
+callback). Creation is mutex-guarded so concurrent first calls can't
+each create their own harness, and it's self-healing: deleting that
+harness via `DELETE /harnesses/<id>` just causes the next direct call
+to create a fresh one. An unknown tool name is **not** a routing
+404 — like `POST /harnesses/<id>/tools/<name>`, it comes back as an
+ordinary `200` with `{"ok": false, "error": {"type": "unknown_tool",
+...}}`.
 
 ## Designing a UI around this API
 
@@ -189,11 +220,12 @@ term.**
   `test/test_codex_harness_server.pl`) that posts
   `{"approval": "shell(rm)", ...}` and asserts creation still succeeds
   with the value simply dropped.
-- **Tool names on `POST /harnesses/<id>/tools/<name>` are only ever
-  unified against `dispatch_tool/5`'s fixed clause table** (in
-  `codex_harness.pl`) — an unknown or attacker-chosen name can never
-  resolve to an arbitrary predicate; it falls through to the
-  `unknown_tool` error clause instead.
+- **Tool names on `POST /harnesses/<id>/tools/<name>` (and the
+  harness-less `POST /tools/<name>`) are only ever unified against
+  `dispatch_tool/5`'s fixed clause table** (in `codex_harness.pl`) —
+  an unknown or attacker-chosen name can never resolve to an arbitrary
+  predicate; it falls through to the `unknown_tool` error clause
+  instead.
 - **The server binds to `localhost` by default.** Pass a different
   `--host` (or set `COPLEX_HOST`) only if the host process
   genuinely runs in a different network namespace from this plugin.

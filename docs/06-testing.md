@@ -14,7 +14,7 @@ swipl -g run_tests -t halt test/test_codex_harness.pl
 swipl -g run_tests -t halt test/test_codex_harness_server.pl
 ```
 
-(30 tests / 9 tests respectively at the time of writing — see below
+(30 tests / 14 tests respectively at the time of writing — see below
 for what each one covers.)
 
 ## `test/test_codex_harness.pl` — 30 tests, by category
@@ -90,10 +90,24 @@ for what each one covers.)
   is genuinely read-only, proving `subagent_allow_writes` actually
   gates write access rather than being decorative.
 
-## `test/test_codex_harness_server.pl` — 9 tests
+## `test/test_codex_harness_server.pl` — 14 tests
 
 - `health` — `GET /health` liveness.
 - `tools_nonempty` — `GET /tools` mirrors the core catalog over HTTP.
+- `tools_advertise_real_endpoint` — every `GET /tools` entry carries a
+  real `method`/`endpoint` (e.g. `read_file` → `POST
+  /coplex/tools/read_file`) instead of leaving a caller to guess a URL.
+- `tool_endpoint_is_callable` — `POST /tools/<name>` (the endpoint
+  `GET /tools` advertises) actually works with no harness id at all.
+- `direct_tool_endpoint_coplex_prefix` — same route, reached through
+  the `/coplex`-prefixed parity mount.
+- `direct_tool_endpoint_unknown_tool_is_200` — an unknown name on
+  `POST /tools/<name>` is an ordinary `200` with an `unknown_tool`
+  error body, matching `POST /harnesses/<id>/tools/<name>`'s
+  behavior, not a routing 404.
+- `direct_tool_endpoint_reuses_shared_harness` — repeated direct calls
+  share one lazily-created harness (`ensure_default_harness/1`)
+  instead of leaking a fresh one per request.
 - `create_run_snapshot_delete` — the core CRUD lifecycle over REST:
   create → synchronous run → snapshot (including `created_at`) →
   messages → delete → confirm it's gone from the list.
