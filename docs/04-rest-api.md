@@ -19,7 +19,7 @@ swipl coplex_server_main.pl --port=8840 --host=localhost
 
 | Method | Path | Core predicate | Notes |
 |---|---|---|---|
-| GET | `/health` | — | Liveness check: `{"ok":true,"service":"task_harness_pl"}`. |
+| GET | `/health` | — | Liveness check: `{"ok":true,"service":"coplex"}`. |
 | GET | `/tools` | `harness_tool_specs/1` | Static tool catalog. |
 | GET | `/harnesses` | `harness_list/1` + `harness_summary/2` | Returns **both** `ids` (plain list) and `harnesses` (array of lightweight status dicts). |
 | POST | `/harnesses` | `harness_new/2` | Body is a JSON object of options; only the safe allowlist (below) is honored. |
@@ -142,7 +142,7 @@ mid-response and the browser's preflight fails). This means a UI
 served from a different origin or dev-server port (Vite, webpack-dev-
 server, ...) can call this API directly with **no reverse proxy**.
 
-Configure via `TASK_HARNESS_CORS_ORIGIN`:
+Configure via `COPLEX_CORS_ORIGIN`:
 
 | Value | Effect |
 |---|---|
@@ -155,7 +155,7 @@ This default is safe *specifically because* the server binds to
 origin can still reach a `localhost`-bound server through a visiting
 user's own browser, so CORS-wildcard + localhost-bind is a deliberate,
 documented pairing, not an oversight. If the bind host is ever changed
-away from `localhost`, tighten `TASK_HARNESS_CORS_ORIGIN` too.
+away from `localhost`, tighten `COPLEX_CORS_ORIGIN` too.
 
 ## Security model (request-body handling)
 
@@ -195,7 +195,7 @@ term.**
   resolve to an arbitrary predicate; it falls through to the
   `unknown_tool` error clause instead.
 - **The server binds to `localhost` by default.** Pass a different
-  `--host` (or set `TASK_HARNESS_HOST`) only if the host process
+  `--host` (or set `COPLEX_HOST`) only if the host process
   genuinely runs in a different network namespace from this plugin.
 
 ## Example session

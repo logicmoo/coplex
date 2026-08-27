@@ -1,6 +1,6 @@
-# task_harness_pl — Design Documentation
+# coplex — Design Documentation
 
-This folder is the deep-dive design reference for `task_harness_pl`: a
+This folder is the deep-dive design reference for `coplex`: a
 Codex/Copilot-style coding-agent harness implemented entirely in
 SWI-Prolog, exposed over a JSON REST API, and supervised as a
 subprocess by a small Python process manager. For a quickstart and the
@@ -56,7 +56,7 @@ graph TB
         WB["Workbench"]
     end
 
-    subgraph Plugin["task_harness_pl plugin"]
+    subgraph Plugin["coplex plugin"]
         PY["plugin.py\n(process manager)\nplugin-lifecycle + plugin-api"]
         subgraph SW["swipl subprocess"]
             MAIN["coplex_server_main.pl\n(runnable entry point)"]

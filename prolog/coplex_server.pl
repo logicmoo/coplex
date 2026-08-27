@@ -58,7 +58,7 @@ functor:
     of exposing a REST surface for "someone to design a UI around".
     This is safe *because* the server only binds to localhost by
     default -- a remote page can still reach it via a victim's
-    browser, so set `TASK_HARNESS_CORS_ORIGIN` to a specific origin
+    browser, so set `COPLEX_CORS_ORIGIN` to a specific origin
     (or the empty string to disable CORS entirely) instead of the
     default `*` wildcard for anything beyond local development.
 
@@ -104,12 +104,12 @@ an open connection or a Prolog client:
 %   CORS is on by default (any origin) so a browser-based web UI can
 %   call this API straight from JavaScript without a proxy; this is a
 %   deliberate trade-off documented in the module docstring above.
-%   Override with the TASK_HARNESS_CORS_ORIGIN environment variable:
+%   Override with the COPLEX_CORS_ORIGIN environment variable:
 %   a comma-separated list of allowed origins, or "" to disable CORS.
 :- initialization(configure_cors).
 
 configure_cors :-
-    (   getenv('TASK_HARNESS_CORS_ORIGIN', Raw)
+    (   getenv('COPLEX_CORS_ORIGIN', Raw)
     ->  true
     ;   Raw = "*"
     ),
@@ -129,11 +129,20 @@ cors_origin_list(Raw, Origins) :-
 :- meta_predicate with_existing_harness(+, 0).
 :- meta_predicate with_json_body(+, -, 0).
 
+%   Every route answers at the root and, in parity, under the /coplex
+%   prefix (the pack's slug), so both the workbench's stripped-prefix
+%   proxy mount and direct prefixed callers reach the same handlers.
 :- http_handler('/health', health_handler, [methods([get,options])]).
 :- http_handler('/shutdown', shutdown_handler, [methods([post,options])]).
 :- http_handler('/tools', tools_handler, [methods([get,options])]).
 :- http_handler('/harnesses', harnesses_collection, [methods([get,post,options])]).
 :- http_handler('/harnesses/', harnesses_item, [prefix]).
+:- http_handler('/coplex', coplex_status_handler, [methods([get,options])]).
+:- http_handler('/coplex/health', health_handler, [methods([get,options])]).
+:- http_handler('/coplex/shutdown', shutdown_handler, [methods([post,options])]).
+:- http_handler('/coplex/tools', tools_handler, [methods([get,options])]).
+:- http_handler('/coplex/harnesses', harnesses_collection, [methods([get,post,options])]).
+:- http_handler('/coplex/harnesses/', harnesses_item, [prefix]).
 
 %!  server_start(+Port, +Host) is det.
 %
@@ -167,8 +176,56 @@ health_handler(Request) :-
     ->  cors_enable(Request, [methods([get])]),
         format('~n')
     ;   cors_enable,
-        reply_json_dict(_{ok:true, service:"task_harness_pl"})
+        reply_json_dict(_{ok:true, service:"coplex"})
     ).
+
+%!  coplex_status_handler(+Request) is det.
+%
+%   GET /coplex -- the same status document `python plugin.py status`
+%   prints on the host side: identity, swipl version, server binding,
+%   path prefixes, and the endpoint list.
+coplex_status_handler(Request) :-
+    ( memberchk(method(options), Request)
+    ->  cors_enable(Request, [methods([get])]),
+        format('~n')
+    ;   cors_enable,
+        swipl_version_string(Version),
+        ( running_port(Port) -> Running = true ; Port = null, Running = false ),
+        rest_endpoints(Endpoints),
+        reply_json_dict(_{
+            ok: true,
+            plugin_id: "coplex",
+            slug: "coplex",
+            standalone: true,
+            swipl_version: Version,
+            server: _{running: Running, port: Port},
+            rest_api: Running,
+            path_prefixes: ["/", "/coplex"],
+            endpoints: Endpoints
+        })
+    ).
+
+swipl_version_string(Version) :-
+    current_prolog_flag(version, N),
+    Major is N // 10000,
+    Minor is (N // 100) mod 100,
+    Patch is N mod 100,
+    format(string(Version), "~w.~w.~w", [Major, Minor, Patch]).
+
+rest_endpoints([
+    "GET    /health",
+    "GET    /tools",
+    "GET    /harnesses",
+    "POST   /harnesses",
+    "GET    /harnesses/<id>",
+    "DELETE /harnesses/<id>",
+    "POST   /harnesses/<id>/run",
+    "POST   /harnesses/<id>/cancel",
+    "POST   /harnesses/<id>/reset",
+    "GET    /harnesses/<id>/messages",
+    "POST   /harnesses/<id>/tools/<name>",
+    "POST   /shutdown"
+]).
 
 shutdown_handler(Request) :-
     ( memberchk(method(options), Request)
@@ -232,7 +289,13 @@ harnesses_item(Request) :-
     ).
 
 path_segments_after(Prefix, Path, Segments) :-
-    atom_concat(Prefix, Rest, Path),
+    %   The same handler serves the root route and its /coplex-prefixed
+    %   parity route, so an optional /coplex is stripped before matching.
+    (   atom_concat(Prefix, Rest, Path)
+    ->  true
+    ;   atom_concat('/coplex', Unprefixed, Path),
+        atom_concat(Prefix, Rest, Unprefixed)
+    ),
     split_string(Rest, "/", "", Segments0),
     exclude(==(""), Segments0, Segments).
 

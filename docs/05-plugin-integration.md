@@ -48,7 +48,7 @@ sequenceDiagram
 | `installAfter` | `install_after()` | Runs the core plunit suite (`test_codex_harness.pl`) as a post-install smoke test, so a broken checkout is caught immediately. |
 | `uninstall` | `uninstall()` | Makes sure the REST server isn't left running (`stop_server()`). |
 | `uninstallAfter` | `uninstall_after()` | No-op note: nothing is installed outside this plugin directory. |
-| `workbenchStartup` | `workbench_startup()` | Starts the **one shared** REST server for the whole workbench session (reads `TASK_HARNESS_HOST`/`TASK_HARNESS_PORT`). |
+| `workbenchStartup` | `workbench_startup()` | Starts the **one shared** REST server for the whole workbench session (reads `COPLEX_HOST`/`COPLEX_PORT`). |
 | `workbenchStartupAfter` | `workbench_startup_after()` | Returns `status()` so the host can immediately show plugin health. |
 | `workbenchShutdown` | `workbench_shutdown()` | Stops that shared server. |
 | `workbenchShutdownAfter` | `workbench_shutdown_after()` | `{ok:true}`. |
@@ -115,15 +115,15 @@ crash doesn't cause every subsequent call to falsely report "running".
 
 | Variable | Read by | Default | Effect |
 |---|---|---|---|
-| `TASK_HARNESS_HOST` | `plugin.py` (`workbench_startup`, `restart`) | `localhost` | Bind host passed to the subprocess. |
-| `TASK_HARNESS_PORT` | `plugin.py` (same) | `8840` | Bind port passed to the subprocess. |
-| `TASK_HARNESS_CORS_ORIGIN` | `coplex_server.pl` (`configure_cors/0`, read directly by the Prolog process, not by `plugin.py`) | `*` | CORS allowlist — comma-separated origins, or `""` to disable. See [04-rest-api.md](04-rest-api.md). |
+| `COPLEX_HOST` | `plugin.py` (`workbench_startup`, `restart`) | `localhost` | Bind host passed to the subprocess. |
+| `COPLEX_PORT` | `plugin.py` (same) | `8840` | Bind port passed to the subprocess. |
+| `COPLEX_CORS_ORIGIN` | `coplex_server.pl` (`configure_cors/0`, read directly by the Prolog process, not by `plugin.py`) | `*` | CORS allowlist — comma-separated origins, or `""` to disable. See [04-rest-api.md](04-rest-api.md). |
 
 Note the asymmetry: host/port are resolved by `plugin.py` and passed
 as CLI flags to the subprocess, while CORS origin is read directly by
 the Prolog process from its own environment (inherited from whatever
 process launched it — `plugin.py`'s `subprocess.Popen` doesn't
-override the environment, so setting `TASK_HARNESS_CORS_ORIGIN` in the
+override the environment, so setting `COPLEX_CORS_ORIGIN` in the
 workbench's own environment before it starts the plugin is sufficient).
 
 ## Manual CLI

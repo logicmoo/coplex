@@ -2,7 +2,7 @@
 
 ## Layering
 
-`task_harness_pl` is deliberately split into three layers that only
+`coplex` is deliberately split into three layers that only
 ever talk to the layer directly below them. Nothing in
 `codex_harness.pl` knows HTTP exists; nothing in
 `coplex_server.pl` knows about subprocess management; `plugin.py`

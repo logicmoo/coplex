@@ -201,7 +201,7 @@ CORS (`Access-Control-Allow-Origin`) is enabled by default for any
 origin, including the `OPTIONS` preflight every browser sends before a
 cross-origin `POST`/`DELETE`, so a UI served from a different origin
 (e.g. a Vite/webpack dev server) can call this API directly with no
-proxy. Set `TASK_HARNESS_CORS_ORIGIN` to a comma-separated list of
+proxy. Set `COPLEX_CORS_ORIGIN` to a comma-separated list of
 allowed origins, or to `""` to disable CORS entirely, for anything
 beyond local development.
 
@@ -227,7 +227,7 @@ callable term:
   resolve to an arbitrary predicate.
 - CORS defaults to `*` (any origin), which is safe *only* because the
   server binds to `localhost` by default; tighten
-  `TASK_HARNESS_CORS_ORIGIN` if that default host binding is ever
+  `COPLEX_CORS_ORIGIN` if that default host binding is ever
   changed.
 
 Tests: `swipl -g run_tests -t halt test/test_codex_harness_server.pl` (spins

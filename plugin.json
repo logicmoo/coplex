@@ -1,12 +1,16 @@
 {
-  "id": "task_harness_pl",
-  "label": "Task Harness (SWI-Prolog)",
+  "id": "coplex",
+  "label": "Coplex (SWI-Prolog Task Harness)",
   "description": "Codex/Copilot-style coding-agent harness implemented in SWI-Prolog. Provider-agnostic adapter loop, repository tools, permissions, and concurrent analysis-only subagents.",
   "summary": "Load the Prolog harness, run plunit tests, and drive an agent loop from SWI-Prolog.",
   "version": "0.1.0",
   "entrypoint": "plugin.py",
   "scan": "startup",
-  "routePrefix": "/task_harness_pl",
+  "routePrefix": "/coplex",
+  "servicesEndpoint": {
+    "path": "/coplex/tools",
+    "description": "The swipl REST server's tool registry (through the /coplex mount); the full endpoint list is described by GET /health and the plugin-api config() surface."
+  },
   "docs": "README.md",
   "kind": "custom",
   "requestTimeoutSeconds": 0,
@@ -36,9 +40,16 @@
       "Nothing to uninstall beyond SWI-Prolog itself (a shared system dependency, not owned by this plugin) -- remove this directory to drop the plugin, or set scan: disabled in plugins.json to keep it but stop scanning it."
     ]
   },
-  "plugin-init": [],
+  "plugin-init": [
+    {
+      "command": "web_proxy",
+      "description": "Redirects /coplex to the standalone swipl REST server (prolog/coplex_server.pl).",
+      "redirect": "http://127.0.0.1:8840",
+      "path": "/coplex"
+    }
+  ],
   "plugin-lifecycle": {
-    "standalone": false,
+    "standalone": true,
     "hooks": {
       "install": "install",
       "installAfter": "install_after",
@@ -60,7 +71,7 @@
     "config": "config",
     "restart": "restart",
     "shutdown": "shutdown",
-    "note": "Implemented in plugin.py, backed by the REST server in prolog/coplex_server.pl (routePrefix informational only -- the server listens directly on its own host:port, default http://localhost:8840, overridable via TASK_HARNESS_HOST/TASK_HARNESS_PORT). status reports swipl/server health; config describes the REST endpoints and the safe harness_new/2 option subset the server accepts from JSON; restart stops and relaunches the server subprocess; shutdown stops it. See README.md's REST API section for the full endpoint list and the security model (no request body is ever parsed as Prolog code or used to construct a callable)."
+    "note": "Implemented in plugin.py, backed by the REST server in prolog/coplex_server.pl (routePrefix informational only -- the server listens directly on its own host:port, default http://localhost:8840, overridable via COPLEX_HOST/COPLEX_PORT). status reports swipl/server health; config describes the REST endpoints and the safe harness_new/2 option subset the server accepts from JSON; restart stops and relaunches the server subprocess; shutdown stops it. See README.md's REST API section for the full endpoint list and the security model (no request body is ever parsed as Prolog code or used to construct a callable)."
   },
   "ui": {
     "pages": [
@@ -68,7 +79,7 @@
         "id": "docs",
         "label": "Task Harness (SWI-Prolog) Docs",
         "kind": "docs",
-        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/README.md",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/coplex/README.md",
         "external": true,
         "glyph": "?",
         "group": "SYSTEM"
@@ -77,7 +88,7 @@
         "id": "feature-guide",
         "label": "Feature Guidance & Pitfalls",
         "kind": "docs",
-        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/FEATURE_GUIDE.md",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/coplex/FEATURE_GUIDE.md",
         "external": true,
         "glyph": "?",
         "group": "SYSTEM"
@@ -86,7 +97,7 @@
         "id": "design-docs",
         "label": "Design Docs (architecture, REST, tools, testing)",
         "kind": "docs",
-        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/docs/README.md",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/coplex/docs/README.md",
         "external": true,
         "glyph": "?",
         "group": "SYSTEM"
@@ -95,7 +106,7 @@
         "id": "curriculum",
         "label": "Curriculum: How Coding Agents Work",
         "kind": "docs",
-        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/docs/curriculum/README.md",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/coplex/docs/curriculum/README.md",
         "external": true,
         "glyph": "?",
         "group": "SYSTEM"
@@ -104,7 +115,7 @@
         "id": "harness-source",
         "label": "Edit codex_harness.pl",
         "kind": "configure",
-        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/prolog/coplex/codex_harness.pl",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/coplex/prolog/coplex/codex_harness.pl",
         "external": true,
         "glyph": "</>",
         "group": "CAPABILITIES"
@@ -113,7 +124,7 @@
         "id": "rest-server-source",
         "label": "Edit coplex_server.pl (REST API)",
         "kind": "configure",
-        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/task_harness_pl/prolog/coplex_server.pl",
+        "descriptor": "http://127.0.0.1:5173/?view=docs&docsFile=workbench/plugins/coplex/prolog/coplex_server.pl",
         "external": true,
         "glyph": "</>",
         "group": "CAPABILITIES"

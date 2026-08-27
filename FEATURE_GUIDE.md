@@ -1,6 +1,6 @@
-# task_harness_pl — Extra Feature Guidance
+# coplex — Extra Feature Guidance
 
-This is a companion to `README.md` for whoever picks up `task_harness_pl`
+This is a companion to `README.md` for whoever picks up `coplex`
 next. It describes the known extension points, how to implement each
 optional feature safely, and the pitfalls already discovered in this
 codebase so they aren't re-learned the hard way.
@@ -57,7 +57,7 @@ is now exposed over HTTP:
   with HTTP 409 (`guard_not_running/1`) instead of corrupting shared
   state. CORS (`library(http/http_cors)`) is enabled by default for any
   origin — including `OPTIONS` preflight — via
-  `TASK_HARNESS_CORS_ORIGIN` (comma-separated origins, default `*`,
+  `COPLEX_CORS_ORIGIN` (comma-separated origins, default `*`,
   `""` disables it), so a browser UI on a different origin/dev-server
   port needs no proxy.
 - The runnable entry point lives in a separate file,

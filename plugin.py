@@ -1,4 +1,4 @@
-"""task_harness_pl workbench plugin (backed by the "coplex" pack).
+"""coplex workbench plugin (backed by the "coplex" pack).
 
 The coding-agent loop lives in SWI-Prolog (`prolog/coplex/codex_harness.pl`)
 and is exposed over HTTP by `prolog/coplex_server.pl`, a small JSON REST
@@ -48,7 +48,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
-PLUGIN_ID = "task_harness_pl"
+PLUGIN_ID = "coplex"
 HARNESS_MODULE = "prolog/coplex/codex_harness.pl"
 SERVER_MODULE = "prolog/coplex_server.pl"
 SERVER_MAIN = "prolog/coplex_server_main.pl"
@@ -61,6 +61,25 @@ DEFAULT_PORT = 8840
 DEFAULT_HOST = "localhost"
 START_TIMEOUT_SECONDS = 10
 HEALTH_POLL_INTERVAL = 0.2
+
+# The REST surface served by prolog/coplex_server.pl. Every route also
+# answers under the /coplex prefix (the pack's slug), both directly on the
+# server port and through the workbench's /coplex mount.
+REST_ENDPOINTS = [
+    "GET    /health",
+    "GET    /tools",
+    "GET    /harnesses",
+    "POST   /harnesses",
+    "GET    /harnesses/<id>",
+    "DELETE /harnesses/<id>",
+    "POST   /harnesses/<id>/run",
+    "POST   /harnesses/<id>/cancel",
+    "POST   /harnesses/<id>/reset",
+    "GET    /harnesses/<id>/messages",
+    "POST   /harnesses/<id>/tools/<name>",
+    "POST   /shutdown",
+]
+PATH_PREFIXES = ["/", "/coplex"]
 
 
 # --------------------------------------------------------------------------
@@ -313,8 +332,8 @@ def uninstall_after() -> dict:
 def workbench_startup() -> dict:
     """Start the shared REST server so the workbench can immediately
     drive this plugin over HTTP."""
-    port = int(os.environ.get("TASK_HARNESS_PORT", DEFAULT_PORT))
-    host = os.environ.get("TASK_HARNESS_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("COPLEX_PORT", DEFAULT_PORT))
+    host = os.environ.get("COPLEX_HOST", DEFAULT_HOST)
     return start_server(port=port, host=host)
 
 
@@ -350,6 +369,28 @@ def workspace_shutdown_after() -> dict:
 
 
 # --------------------------------------------------------------------------
+# plugin loader hook
+# --------------------------------------------------------------------------
+
+def create_router(manifest: dict | None = None):
+    """Plugin hook: ensure the standalone swipl REST server is running.
+
+    Standalone-only -- the harness lives in its own swipl process
+    (prolog/coplex_server_main.pl) and the workbench reaches it through the
+    web_proxy mount declared in plugin.json, so this contributes no in-process
+    routes. A missing swipl is reported by status()/lifecycle surfaces, never
+    raised here (the catalog should list the plugin either way).
+    """
+
+    port = int(os.environ.get("COPLEX_PORT", DEFAULT_PORT))
+    host = os.environ.get("COPLEX_HOST", DEFAULT_HOST)
+    start_server(port=port, host=host)
+    from fastapi import APIRouter
+
+    return APIRouter()
+
+
+# --------------------------------------------------------------------------
 # plugin-api surface (names referenced from plugin.json)
 # --------------------------------------------------------------------------
 
@@ -362,7 +403,7 @@ def status() -> dict:
     return {
         "ok": True,
         "plugin_id": PLUGIN_ID,
-        "standalone": False,
+        "standalone": True,
         "swipl": swipl,
         "swipl_version": _swipl_version() if swipl else None,
         "harness_module": HARNESS_MODULE,
@@ -370,6 +411,8 @@ def status() -> dict:
         "server": server,
         "rest_api": running,
         "base_url": f"http://{server.get('host')}:{server.get('port')}" if running else None,
+        "path_prefixes": PATH_PREFIXES,
+        "endpoints": REST_ENDPOINTS,
     }
 
 
@@ -381,25 +424,13 @@ def config() -> dict:
         "server": {
             "default_host": DEFAULT_HOST,
             "default_port": DEFAULT_PORT,
-            "host_env": "TASK_HARNESS_HOST",
-            "port_env": "TASK_HARNESS_PORT",
-            "cors_origin_env": "TASK_HARNESS_CORS_ORIGIN",
+            "host_env": "COPLEX_HOST",
+            "port_env": "COPLEX_PORT",
+            "cors_origin_env": "COPLEX_CORS_ORIGIN",
             "cors_origin_default": "*",
         },
-        "endpoints": [
-            "GET    /health",
-            "GET    /tools",
-            "GET    /harnesses",
-            "POST   /harnesses",
-            "GET    /harnesses/<id>",
-            "DELETE /harnesses/<id>",
-            "POST   /harnesses/<id>/run",
-            "POST   /harnesses/<id>/cancel",
-            "POST   /harnesses/<id>/reset",
-            "GET    /harnesses/<id>/messages",
-            "POST   /harnesses/<id>/tools/<name>",
-            "POST   /shutdown",
-        ],
+        "endpoints": REST_ENDPOINTS,
+        "path_prefixes": PATH_PREFIXES,
         "ui_notes": (
             "GET /harnesses returns both 'ids' and a lightweight 'harnesses' summary list "
             "(running/current_task/iteration/last_answer/last_error/message_count/"
@@ -410,7 +441,7 @@ def config() -> dict:
             "above) for 'running' to flip back to false. A run request while one is already "
             "in flight is rejected with HTTP 409. CORS is enabled by default (any origin) so "
             "a browser-based UI can call this API directly; restrict it with "
-            "TASK_HARNESS_CORS_ORIGIN (comma-separated origins, or '' to disable) for anything "
+            "COPLEX_CORS_ORIGIN (comma-separated origins, or '' to disable) for anything "
             "beyond local development."
         ),
         "harness_new_options": {
@@ -448,8 +479,8 @@ def config() -> dict:
 
 def restart() -> dict:
     stop_server()
-    port = int(os.environ.get("TASK_HARNESS_PORT", DEFAULT_PORT))
-    host = os.environ.get("TASK_HARNESS_HOST", DEFAULT_HOST)
+    port = int(os.environ.get("COPLEX_PORT", DEFAULT_PORT))
+    host = os.environ.get("COPLEX_HOST", DEFAULT_HOST)
     return start_server(port=port, host=host)
 
 
