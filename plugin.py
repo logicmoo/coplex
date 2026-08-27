@@ -471,7 +471,9 @@ def config() -> dict:
             "default_test_command": "string/list, or 'auto'",
             "mock_replies": "list of {content, tool_calls} dicts (scripted adapter only)",
             "allowed_tools": "list of tool-name strings, or 'all'",
-            "adapter": "'scripted' or 'mock' only over REST; a real adapter callable can only be set in-process",
+            "adapter": "'scripted', 'mock', or 'openai' over REST; a fully custom adapter callable can only be set in-process",
+            "adapter_url": "string, endpoint openai_chat_adapter/3 POSTs to (default the public OpenAI Chat Completions endpoint)",
+            "adapter_api_key": "string, sent as 'Authorization: Bearer <key>' by the openai adapter; auto-redacted from tool output/events, never returned by any harness read",
         },
         "note": (
             "approval, on_event, parent, and web_search_backend are intentionally not settable over REST: "

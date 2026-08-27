@@ -4,7 +4,7 @@
 
 | Suite | File | Style | What it proves |
 |---|---|---|---|
-| Core engine | `test/test_codex_harness.pl` | Pure in-process plunit, `scripted`/`mock` adapter only — no network, no live model | The agent loop, every tool, and the permission model behave correctly in isolation. |
+| Core engine | `test/test_codex_harness.pl` | Pure in-process plunit, `scripted`/`mock`/`openai` adapters only — no external network, no live model | The agent loop, every tool, and the permission model behave correctly in isolation. The `openai` adapter tests are the one exception to "no network": they stand up a real localhost HTTP server as a stand-in provider, so the full request/response translation and multi-turn tool-calling loop are exercised end-to-end without any external network egress or live model call. |
 | REST facade | `test/test_codex_harness_server.pl` | plunit driving a **real HTTP server** on an ephemeral localhost port via `library(http/http_open)` | The JSON wire format, routing, status codes, and REST-specific security/UI contracts (async run, CORS, list summaries) all work end-to-end over the wire, not just at the Prolog call level. |
 
 Run both:
@@ -14,10 +14,10 @@ swipl -g run_tests -t halt test/test_codex_harness.pl
 swipl -g run_tests -t halt test/test_codex_harness_server.pl
 ```
 
-(30 tests / 14 tests respectively at the time of writing — see below
+(34 tests / 15 tests respectively at the time of writing — see below
 for what each one covers.)
 
-## `test/test_codex_harness.pl` — 30 tests, by category
+## `test/test_codex_harness.pl` — 34 tests, by category
 
 **Lifecycle & conversation state**
 - `new_close` — create/destroy doesn't leak or error.
@@ -72,6 +72,24 @@ for what each one covers.)
 - `web_search_backend` — the injected `web_search_backend(Goal)` hook
   is actually invoked and its results returned.
 
+**Real LLM adapter (`openai`)**
+- `openai_adapter_full_tool_loop` — the strongest test in the suite: a
+  real localhost HTTP server stands in for an OpenAI-compatible
+  provider and drives a genuine two-turn tool-calling loop (model
+  requests `read_file`, harness executes it for real, model reads the
+  result and gives a final answer), proving the request/response
+  translation, the `Authorization` header, and the harness's own loop
+  all compose correctly end-to-end.
+- `openai_adapter_requires_allow_network` — `adapter(openai)` never
+  attempts a network call at all while `allow_network` is left at its
+  default `false`; fails gracefully with a permission error instead.
+- `openai_adapter_respects_allowed_hosts` — `adapter_url` is checked
+  against `allowed_hosts` exactly like any tool-initiated fetch; the
+  stub server is provably never even contacted on a mismatch.
+- `openai_json_schema_of_params` — pure translation check: the
+  lightweight per-tool param dicts from `harness_tool_specs/1` convert
+  to valid JSON Schema.
+
 **Permission model & tool dispatch**
 - `unknown_tool` — an unrecognized tool name gets a clean
   `unknown_tool` error, not a Prolog existence error leaking out.
@@ -90,7 +108,7 @@ for what each one covers.)
   is genuinely read-only, proving `subagent_allow_writes` actually
   gates write access rather than being decorative.
 
-## `test/test_codex_harness_server.pl` — 14 tests
+## `test/test_codex_harness_server.pl` — 15 tests
 
 - `health` — `GET /health` liveness.
 - `tools_nonempty` — `GET /tools` mirrors the core catalog over HTTP.
@@ -132,6 +150,14 @@ for what each one covers.)
   into a callable goal). This is the test that would fail loudly if
   `safe_option_key/1`'s allowlist were ever accidentally widened to
   include a goal-shaped option.
+- `openai_adapter_selectable_and_key_not_leaked` — **security
+  regression test**: `adapter:"openai"` plus `adapter_url`/
+  `adapter_api_key` must be accepted at creation, but the API key must
+  never come back out through `GET /harnesses/<id>` or `GET
+  /harnesses`'s summary list — the same "never reflected back"
+  contract `goal_shaped_options_are_ignored` protects for
+  `approval`/`on_event`/etc., applied to the one REST-reachable option
+  that is a real secret.
 - `cors_preflight_and_headers` — an `OPTIONS` preflight against
   `/harnesses` returns 200 with `Access-Control-Allow-Origin: *`, and
   a normal `GET /health` reply carries the same header — protects the

@@ -91,8 +91,23 @@ _{ content:"...", tool_calls:[ _{id, name, arguments} ] }
 Empty `tool_calls` is the final answer.
 
 Built-in `adapter(scripted)` / `adapter(mock)` consume `mock_replies/1`.
-`http_json_adapter(Url)` is a documented skeleton: POST the request JSON,
-expect the reply JSON. Do not persist secrets in harness state.
+`adapter(openai)` is a complete adapter for OpenAI-compatible Chat
+Completions APIs (OpenAI, Azure OpenAI, or a self-hosted server
+speaking the same wire format -- vLLM, Ollama's `/v1` shim, LM
+Studio, ...); point it at a real endpoint with `adapter_url` and
+`adapter_api_key` (sent as `Authorization: Bearer <key>`), and set
+`allow_network(true)` -- reaching a real hosted LLM is real network
+egress, gated the same way `web_search`/`web_get`/`download` already
+are. `http_json_adapter(Url)` remains a documented skeleton for an
+endpoint that already speaks this harness's own `{content,
+tool_calls}` wire format directly; anything else needs a small
+translation adapter of its own (see `FEATURE_GUIDE.md` §1 and
+`docs/curriculum/09-connecting-a-real-model.md`). Do not persist
+secrets for a *custom* adapter in harness state -- pass them as
+closure arguments instead (`adapter(openai)` is the one built-in
+exception, and only because it must be reachable from JSON-only REST
+callers with no way to pass a closure; see `FEATURE_GUIDE.md` §1 for
+how the key still never leaks back out).
 
 ## Options
 
@@ -105,7 +120,9 @@ shell later), `allowed_hosts`, `writable_paths`, `readable_paths`,
 `approval(Goal)` where `call(Goal, Tool, Args, allow|deny(Reason))`,
 `on_event(Goal)`, `transcript(Path)`, `secrets([...])`,
 `default_test_command([Cmd|Args])`, `web_search_backend(Goal)`,
-`mock_replies([...])`, `allowed_tools(all|[...])`.
+`mock_replies([...])`, `allowed_tools(all|[...])`, `adapter_url`
+(default the public OpenAI endpoint; only consulted by
+`adapter(openai)`), `adapter_api_key` (default `""`; ditto).
 
 ## Tools
 
@@ -239,9 +256,14 @@ callable term:
   `harness_new/2` options (`root`, `cwd`, `model`, `instructions`,
   `allow_shell`, `allow_network`, `allowed_hosts`, `writable_paths`,
   `readable_paths`, `timeout`, `max_steps`, `transcript`,
-  `mock_replies`, `allowed_tools`, ... -- see `config()` in `plugin.py`
-  for the full, current list). `adapter` is normalized to the atom
-  `scripted` or `mock` only; any other value falls back to `scripted`.
+  `mock_replies`, `allowed_tools`, `adapter_url`, `adapter_api_key`,
+  ... -- see `config()` in `plugin.py` for the full, current list).
+  `adapter` is normalized to one of three fixed atoms -- `scripted`,
+  `mock`, or `openai` -- any other value falls back to `scripted`.
+  `adapter_api_key` is plain text, never a callable, but it is real
+  network-facing configuration: see the Adapter contract section
+  above for how the key is redacted/never echoed back despite living
+  in harness state.
 - `approval`, `on_event`, `parent`, and `web_search_backend` are
   **never** settable over REST, because `codex_harness.pl` eventually
   `call/N`'s each of them -- accepting them from untrusted JSON would
@@ -272,7 +294,11 @@ Example: `swipl -s examples/example_codex_harness.pl -t halt`.
 
 ## Limitations
 
-- `http_json_adapter/3` is a skeleton; providers must map their schema.
+- `http_json_adapter/3` remains a skeleton for a bespoke endpoint that
+  already speaks this harness's own wire format; a provider that
+  speaks neither that nor `adapter(openai)`'s OpenAI-compatible shape
+  (e.g. Anthropic's messages API) still needs its own small
+  translation adapter (see `FEATURE_GUIDE.md` §1).
 - Unified-diff parser handles standard `---`/`+++`/`@@` hunks, not git
   binary patches or rename headers.
 - `web_search` requires an injected `web_search_backend/2` goal.

@@ -165,6 +165,18 @@ When network access is allowed, every URL still passes through
 `safe_resolve/3` + `writable_allowed/2` checks as any other write tool
 — network access being enabled does not relax the filesystem fence.
 
+**`openai_chat_adapter/3` does *not* reuse this exact guard.** Its own
+`validate_adapter_url/2` still enforces the scheme allowlist and
+`allowed_hosts`, but deliberately skips step 3 (the loopback/private-
+range blocklist): `adapter_url` is trusted, operator-supplied
+configuration fixed at harness-creation time — like `root`/`cwd` — not
+task/model-controlled input the way a tool's `url` argument is, and a
+locally-hosted model server (Ollama, vLLM, LM Studio, an internal
+gateway) on a loopback or private address is a completely ordinary,
+legitimate value for it. Blocking it there would rule out one of the
+most common real deployments of a "real LLM adapter" for no actual
+security benefit, since nothing untrusted ever gets to choose that URL.
+
 ## `apply_patch`: unified-diff handling
 
 `tool_apply_patch/3` parses a standard unified diff (`---`/`+++`/`@@`

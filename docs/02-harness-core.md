@@ -188,13 +188,28 @@ Built-in adapters:
   and `mock` (and an already-wrapped `scripted_adapter(_)` term) to
   `scripted_adapter(Id)`; anything else passes through untouched, so a
   real provider adapter needs zero core-module changes to register.
+- **`openai` (`openai_chat_adapter/3`)** — a complete translation
+  adapter for OpenAI-compatible Chat Completions APIs (OpenAI itself,
+  Azure OpenAI, or a self-hosted server speaking the same wire format
+  -- vLLM, Ollama's `/v1` shim, LM Studio, ...): builds the request
+  body (system/user/assistant/tool messages, `tools` in the
+  `{type:"function", function:{name,description,parameters}}` shape),
+  POSTs it to the `adapter_url` option with
+  `Authorization: Bearer <adapter_api_key>`, and translates the reply
+  back through `normalize_reply/2`. Gated by `allow_network` like the
+  web tools; `validate_adapter_url/2` still enforces `allowed_hosts`
+  but deliberately does *not* block loopback/private-range hosts,
+  since `adapter_url` is trusted config, not model-controlled input --
+  see `FEATURE_GUIDE.md` §1 for the full security rationale (including
+  why the API key lives in harness state here, unlike the advice for a
+  fully custom adapter below).
 - **`http_json_adapter(Url, Request, Reply)`** — a documented skeleton:
   POSTs the normalized request as JSON via `library(http/http_client)`
-  and expects `{content, tool_calls}` JSON back. Real providers (OpenAI
-  chat-completions shape, Anthropic messages shape, etc.) need a
-  small translation adapter of their own — see `FEATURE_GUIDE.md` §1
-  for the recommended pattern (never store API keys in harness state;
-  pass them as closure arguments to your adapter goal).
+  and expects `{content, tool_calls}` JSON back. A provider that
+  doesn't already speak this harness's own wire format (or the
+  `openai` adapter's OpenAI-compatible one above) needs a small
+  translation adapter of its own — see `FEATURE_GUIDE.md` §1 for the
+  recommended pattern.
 
 ## Repository context gathering
 

@@ -202,13 +202,29 @@ term.**
   `max_output_bytes`, `max_download_bytes`, `timeout`,
   `command_timeout`, `max_steps`, `subagent_limit`,
   `subagent_allow_writes`, `transcript`, `secrets`,
-  `default_test_command`, `mock_replies`, `allowed_tools`, `adapter`).
+  `default_test_command`, `mock_replies`, `allowed_tools`, `adapter`,
+  `adapter_url`, `adapter_api_key`).
   Anything else is silently dropped, not errored — a client sending
   extra keys still succeeds.
 - **`adapter` is normalized, not passed through.** `sanitize_value/3`
-  maps the incoming value to the atom `mock` (if it's literally
-  `"mock"`/`mock`) or `scripted` for anything else — a JSON body can
-  never select an arbitrary in-process adapter goal.
+  maps the incoming value to one of three fixed atoms — `mock` (if
+  literally `"mock"`/`mock`), `openai` (if literally
+  `"openai"`/`openai`), or `scripted` for anything else — a JSON body
+  can never select an arbitrary in-process adapter goal.
+  `adapter_url`/`adapter_api_key` are plain text (a URL, a bearer
+  token) only ever consumed by `openai_chat_adapter/3`'s outbound HTTP
+  POST, never `call/N`'d, so they're as safe to accept as
+  `root`/`instructions`. The API key is never returned by any read —
+  `harness_snapshot/2`/`harness_summary/2` build an explicit field
+  allowlist that omits it, and it's auto-folded into `secrets` so
+  `redact_result/3` scrubs it from tool results/events too (see
+  `openai_adapter_selectable_and_key_not_leaked` in
+  `test/test_codex_harness_server.pl`).
+  **`allowed_hosts` is atom-normalized on the way in** — a JSON array
+  can only supply strings, but the host `validate_adapter_url/2`/
+  `http_fetch/4` compare it against is always an atom
+  (`library(uri)`), so without this a host list sent over REST would
+  never successfully match anything, silently blocking every host.
 - **`approval`, `on_event`, `parent`, and `web_search_backend` are
   never accepted from JSON at all** — they're simply absent from
   `safe_option_key/1`. This matters because `codex_harness.pl`

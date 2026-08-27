@@ -43,9 +43,14 @@ functor:
     `web_search_backend` (all of which the core module eventually
     call/N's) are *not* in the allowlist and can only be set by an
     in-process Prolog caller of harness_new/2 directly.
-  * `adapter` is normalised to one of the two built-in atoms
-    `scripted` or `mock`; any other value is silently mapped to
-    `scripted` rather than passed through.
+  * `adapter` is normalised to one of three built-in atoms --
+    `scripted`, `mock`, or `openai` -- any other value is silently
+    mapped to `scripted` rather than passed through. `openai` (see
+    `openai_chat_adapter/3`) does make real outbound HTTP calls, but
+    only ever to `adapter_url` (plain, harness-creation-time
+    configuration, gated by the same `allow_network` flag the web
+    tools already require), never to anything derived from a
+    request's `call/N`-shaped fields.
   * Tool names arriving on the URL (`POST /harnesses/<Id>/tools/<Name>`
     or the harness-less `POST /tools/<Name>`) are only ever unified
     against codex_harness's fixed `dispatch_tool/5` clause table, so an
@@ -484,6 +489,11 @@ message_to_string_safe(Error, Msg) :-
 %   Deliberately excludes approval/1, on_event/1, parent/1, and
 %   web_search_backend/1: the core module eventually call/N's each of
 %   those, so they must never be constructible from untrusted JSON.
+%   adapter_url/adapter_api_key are plain text (a URL, a bearer token)
+%   consumed only by openai_chat_adapter/3's HTTP POST -- never
+%   call/N'd -- so they're as safe to accept as root/instructions/
+%   secrets; see sanitize_value/3 for how `adapter` itself stays a
+%   closed, fixed set of atoms.
 safe_option_key(root). safe_option_key(cwd). safe_option_key(model).
 safe_option_key(instructions). safe_option_key(extra_instructions).
 safe_option_key(allow_shell). safe_option_key(allow_network).
@@ -495,7 +505,8 @@ safe_option_key(max_steps). safe_option_key(subagent_limit).
 safe_option_key(subagent_allow_writes). safe_option_key(transcript).
 safe_option_key(secrets). safe_option_key(default_test_command).
 safe_option_key(mock_replies). safe_option_key(allowed_tools).
-safe_option_key(adapter).
+safe_option_key(adapter). safe_option_key(adapter_url).
+safe_option_key(adapter_api_key).
 
 dict_options(Dict, Options) :-
     dict_pairs(Dict, _, Pairs),
@@ -511,10 +522,35 @@ safe_pair_option(Key-Value, Opt) :-
 to_key_atom(Key, Key) :- atom(Key), !.
 to_key_atom(Key, Atom) :- atom_string(Atom, Key).
 
+%!  sanitize_value(+Key, +RawValue, -Value) is det.
+%   `adapter` only ever normalizes to one of three fixed, built-in
+%   atoms -- never an arbitrary value, let alone a callable term.
+%   `openai` is a real, network-capable adapter (see
+%   openai_chat_adapter/3), but it's still just a name from this
+%   closed enumeration, not attacker-controlled code.
 sanitize_value(adapter, V, Out) :-
     !,
     (   (V == "mock" ; V == mock)
     ->  Out = mock
+    ;   (V == "openai" ; V == openai)
+    ->  Out = openai
     ;   Out = scripted
     ).
+%   allowed_hosts is compared against a URI-parsed host, which is
+%   always an atom (library(uri)) -- but a JSON array can only ever
+%   supply strings, so without this normalization every host in an
+%   allowed_hosts sent over REST would silently fail to ever match
+%   (atom \== string), making the option useless -- effectively
+%   blocking every host -- for exactly the callers who need it, i.e.
+%   anyone driving this over HTTP rather than embedding SWI-Prolog
+%   directly. Affects both the network *tools* (http_fetch/4) and
+%   openai_chat_adapter/3's validate_adapter_url/2.
+sanitize_value(allowed_hosts, V, Out) :-
+    !,
+    (   is_list(V)
+    ->  maplist(host_atom, V, Out)
+    ;   Out = []
+    ).
 sanitize_value(_, V, V).
+
+host_atom(H, A) :- atom_string(A, H).

@@ -14,7 +14,8 @@
             harness_tool_specs/1,
             harness_list/1,
             scripted_adapter/3,
-            http_json_adapter/3
+            http_json_adapter/3,
+            openai_chat_adapter/3
           ]).
 
 /** <module> Codex/Copilot-style coding-agent harness
@@ -136,7 +137,8 @@ harness_new(Options, codex_harness(Id)) :-
     absolute_file_name(Cwd0, Cwd),
     option(adapter(Adapter0), Options, scripted),
     wrap_adapter(Adapter0, Id, Adapter),
-    option(model(Model), Options, default),
+    default_model_for_adapter(Adapter0, DefModel),
+    option(model(Model), Options, DefModel),
     option(instructions(Instr), Options, DefI),
     option(extra_instructions(Extra), Options, ""),
     option(allow_shell(AllowShell), Options, false),
@@ -155,12 +157,18 @@ harness_new(Options, codex_harness(Id)) :-
     option(approval(Approval), Options, none),
     option(on_event(OnEvent), Options, none),
     option(transcript(Transcript), Options, none),
-    option(secrets(Secrets), Options, []),
+    option(secrets(Secrets0), Options, []),
     option(default_test_command(TestCmd), Options, auto),
     option(web_search_backend(SearchB), Options, none),
     option(mock_replies(Replies), Options, []),
     option(parent(Parent), Options, none),
     option(allowed_tools(AllowedTools), Options, all),
+    option(adapter_url(AdapterUrl0), Options,
+           'https://api.openai.com/v1/chat/completions'),
+    text_of(AdapterUrl0, AdapterUrl),
+    option(adapter_api_key(ApiKey0), Options, ""),
+    text_of(ApiKey0, ApiKey),
+    secrets_with_adapter_key(Secrets0, ApiKey, Secrets),
     State = _{
         id:Id, adapter:Adapter, model:Model,
         instructions:Instr, extra_instructions:Extra,
@@ -190,6 +198,8 @@ harness_new(Options, codex_harness(Id)) :-
         call_seq:0,
         parent:Parent,
         allowed_tools:AllowedTools,
+        adapter_url:AdapterUrl,
+        adapter_api_key:ApiKey,
         created_at:0
     },
     get_time(Now),
@@ -197,9 +207,30 @@ harness_new(Options, codex_harness(Id)) :-
     assertz(harness_rec(Id, Mutex, State1)),
     debug(codex_harness, 'created ~w root=~w', [Id, Root]).
 
+%!  default_model_for_adapter(+Adapter, -Model) is det.
+%   `scripted`/`mock` never look at `model` at all, so `default` stays
+%   an inert placeholder for them; `openai` needs a real, callable
+%   model name, so it gets a concrete default a caller can still
+%   override with the ordinary `model` option.
+default_model_for_adapter(openai, "gpt-4o-mini") :- !.
+default_model_for_adapter(_, default).
+
+%!  secrets_with_adapter_key(+Secrets0, +ApiKey, -Secrets) is det.
+%   Folds a configured adapter_api_key into the harness's redaction
+%   list (see redact_result/3) so it can never leak back out through a
+%   tool result or emitted event, on top of never being included in
+%   any request body in the first place (see openai_chat_adapter/3 --
+%   it's only ever used to build an outbound Authorization header).
+secrets_with_adapter_key(Secrets0, "", Secrets0) :- !.
+secrets_with_adapter_key(Secrets0, ApiKey, Secrets0) :-
+    memberchk(ApiKey, Secrets0), !.
+secrets_with_adapter_key(Secrets0, ApiKey, [ApiKey|Secrets0]).
+
+
 wrap_adapter(scripted, Id, scripted_adapter(Id)) :- !.
 wrap_adapter(mock, Id, scripted_adapter(Id)) :- !.
 wrap_adapter(scripted_adapter(_), Id, scripted_adapter(Id)) :- !.
+wrap_adapter(openai, Id, openai_chat_adapter(Id)) :- !.
 wrap_adapter(Adapter, _, Adapter).
 
 %!  harness_list(-Ids) is det.
@@ -589,6 +620,212 @@ http_post_json(Url, Body, Codes) :-
     (   atom(Reply) -> atom_codes(Reply, Codes)
     ;   string(Reply) -> string_codes(Reply, Codes)
     ;   format(atom(A), '~w', [Reply]), atom_codes(A, Codes)
+    ).
+
+/* ---------------- OpenAI-compatible chat-completions adapter ---------------- */
+
+%!  openai_chat_adapter(+Id, +Request, -Reply) is det.
+%
+%   Provider adapter for OpenAI-compatible Chat Completions APIs --
+%   OpenAI itself, Azure OpenAI, and any self-hosted server speaking
+%   the same wire format (vLLM, Ollama's /v1 shim, LM Studio, ...).
+%   Selected via `harness_new/2`'s `adapter(openai)`; also reachable
+%   *safely* from `POST /harnesses {"adapter": "openai", ...}` because
+%   `adapter` is still normalized to one of a fixed, closed set of
+%   atoms by coplex_server.pl's sanitize_value/3 -- see that module's
+%   docstring for why that matters.
+%
+%   Translates the harness's normalized Request
+%   (`_{model, instructions, messages, tools, options}`) into a Chat
+%   Completions request body -- system/user/assistant/tool messages,
+%   `tools` in the `{type:"function", function:{name, description,
+%   parameters}}` shape -- POSTs it to the harness's `adapter_url`
+%   option (default the public OpenAI endpoint) with
+%   `Authorization: Bearer <adapter_api_key>`, and hands the first
+%   choice's message back through normalize_reply/2, which already
+%   knows how to parse a JSON-*string* `arguments` payload -- exactly
+%   what this wire format uses for each `tool_calls[].function`.
+%
+%   Gated by the same `allow_network` a harness already needs for
+%   web_search/web_get/download: reaching a real hosted LLM is real,
+%   costed network egress, not a local file/process op, so it must be
+%   opted into explicitly, same as any other outbound call. Unlike
+%   http_fetch/4 (used by the *tools*, where the URL is task/model-
+%   controlled input), validate_adapter_url/2 deliberately does *not*
+%   block loopback/private-range hosts: `adapter_url` is trusted,
+%   operator-supplied configuration set once at harness-creation time
+%   -- like `root`/`cwd` -- and a locally-hosted model server (Ollama,
+%   vLLM, LM Studio, an internal gateway) is a completely ordinary,
+%   legitimate value for it.
+openai_chat_adapter(Id, Request, Reply) :-
+    state(Id, S),
+    (   S.allow_network == true
+    ->  true
+    ;   throw(error(permission_error(network, adapter,
+                    "Network access is disabled -- set allow_network:true to let the openai adapter reach a real model"),
+                    _))
+    ),
+    openai_request_body(Request, Body),
+    with_output_to(string(BodyText),
+                   json_write_dict(current_output, Body, [])),
+    http_fetch_post_json(S, S.adapter_url, S.adapter_api_key, BodyText, Codes),
+    string_codes(ReplyText, Codes),
+    catch(atom_json_dict(ReplyText, RawReply, []),
+          _,
+          throw(error(adapter_error("openai adapter got a non-JSON response"), _))),
+    openai_extract_message(RawReply, Raw),
+    normalize_reply(Raw, Reply).
+
+%!  openai_request_body(+Request, -Body) is det.
+%   Request is the harness's normalized `{model, instructions,
+%   messages, tools, options}`; Body is a Chat Completions request.
+openai_request_body(Request, _{model:Request.model, messages:Messages,
+                                tools:Tools, tool_choice:"auto"}) :-
+    openai_message_list(Request.instructions, Request.messages, Messages),
+    maplist(openai_tool, Request.tools, Tools).
+
+openai_message_list(Instr, Msgs, [_{role:"system", content:Instr}|Out]) :-
+    maplist(openai_message, Msgs, Out).
+
+%   role:user   -> plain user turn (task text + repository context).
+%   role:assistant -> the model's own prior turn; tool_calls (if any)
+%   are re-encoded with JSON-*string* arguments, matching the wire
+%   format the API itself used when it originally emitted them.
+%   role:tool   -> a tool's result, JSON-encoded as the message's
+%   string `content` so the model can read a structured result.
+openai_message(M, _{role:"user", content:M.content}) :-
+    M.role == user, !.
+openai_message(M, _{role:"assistant", content:M.content}) :-
+    M.role == assistant, M.tool_calls == [], !.
+openai_message(M, _{role:"assistant", content:M.content, tool_calls:Calls}) :-
+    M.role == assistant, !,
+    maplist(openai_tool_call, M.tool_calls, Calls).
+openai_message(M, _{role:"tool", tool_call_id:M.tool_call_id,
+                    content:ContentText}) :-
+    M.role == tool, !,
+    with_output_to(string(ContentText),
+                   json_write_dict(current_output, M.content, [])).
+openai_message(M, _{role:"user", content:Text}) :-
+    % Defensive fallback for any future/unrecognized role: never drop
+    % a turn silently, just stringify it as a user message.
+    term_string(M, Text).
+
+openai_tool_call(C, _{id:C.id, type:"function",
+                      function:_{name:C.name, arguments:ArgsText}}) :-
+    with_output_to(string(ArgsText),
+                   json_write_dict(current_output, C.arguments, [])).
+
+%!  openai_tool(+ToolSpec, -Tool) is det.
+%   ToolSpec is `_{name, risk, description, parameters}` (see
+%   public_spec/2); Tool is `{type:"function", function:{name,
+%   description, parameters: <JSON Schema object>}}`.
+openai_tool(T, _{type:"function",
+                 function:_{name:T.name, description:T.description,
+                            parameters:Schema}}) :-
+    json_schema_of_params(T.parameters, Schema).
+
+%!  json_schema_of_params(+Params, -Schema) is det.
+%   Params is one of harness_tool_specs/1's lightweight per-tool
+%   dicts, e.g. `_{path:string, offset:integer}`; Schema is a minimal
+%   JSON Schema object a real tool-calling API can validate/generate
+%   arguments against. Every property is left optional (the schemas
+%   here never track required-ness; each tool's own flex_get/4 calls
+%   already supply sane defaults for anything omitted).
+json_schema_of_params(Params, _{type:"object", properties:Props}) :-
+    dict_pairs(Params, _, Pairs),
+    maplist(json_schema_property, Pairs, PropPairs),
+    dict_pairs(Props, _, PropPairs).
+
+json_schema_property(Name-Type, Name-_{type:JsonType}) :-
+    json_schema_type(Type, JsonType).
+
+json_schema_type(string, "string") :- !.
+json_schema_type(integer, "integer") :- !.
+json_schema_type(boolean, "boolean") :- !.
+json_schema_type(list, "array") :- !.
+json_schema_type(_, "string").
+
+%!  openai_extract_message(+RawReply, -Raw) is det.
+%   RawReply is a decoded Chat Completions response
+%   (`atom_json_dict/3` already turns it into nested dicts/lists,
+%   JSON `null` into the atom `null`). Raw is the harness's own raw
+%   adapter-reply shape (`{content, tool_calls}`, tool_calls still
+%   carrying JSON-*string* arguments) that normalize_reply/2 expects.
+openai_extract_message(RawReply, _{content:Content, tool_calls:RawCalls}) :-
+    flex_get(choices, RawReply, Choices0, []),
+    (   Choices0 = [First|_]
+    ->  true
+    ;   throw(error(adapter_error("openai response had no choices"), _))
+    ),
+    flex_get(message, First, Message, _{}),
+    flex_get(content, Message, Content0, ""),
+    (   Content0 == null -> Content = "" ; text_of(Content0, Content) ),
+    flex_get(tool_calls, Message, RawCalls0, []),
+    (   is_list(RawCalls0) -> RawCalls1 = RawCalls0 ; RawCalls1 = [] ),
+    maplist(openai_raw_call, RawCalls1, RawCalls).
+
+openai_raw_call(C, _{id:Id, name:Name, arguments:Args}) :-
+    flex_get(id, C, Id, ""),
+    flex_get(function, C, Fn, _{}),
+    flex_get(name, Fn, Name, unknown),
+    flex_get(arguments, Fn, Args, "{}").
+
+%!  validate_adapter_url(+S, +Url) is det.
+%
+%   Lighter validation than http_fetch/4's SSRF guard -- see
+%   openai_chat_adapter/3's docstring for why loopback/private-range
+%   hosts are deliberately *not* blocked here. Still requires
+%   http/https and still honors `allowed_hosts` if the operator set
+%   one (empty, the default, means unrestricted -- same convention as
+%   path_allowed/2 and writable_allowed/2).
+validate_adapter_url(S, Url) :-
+    uri_components(Url, uri_components(Scheme, Auth, _Path, _Q, _F)),
+    (   memberchk(Scheme, [http, https])
+    ->  true
+    ;   throw(error(permission_error(open, url, Url),
+                    context(_, "only http/https allowed")))
+    ),
+    uri_authority_components(Auth, uri_authority(_, _, Host, _)),
+    (   Host == '' -> throw(error(permission_error(open, url, Url), _))
+    ;   true
+    ),
+    (   S.allowed_hosts == []
+    ->  true
+    ;   (   memberchk(Host, S.allowed_hosts) -> true
+        ;   throw(error(permission_error(open, url, Url),
+                        context(_, "host is not on the allowlist")))
+        )
+    ).
+
+%!  http_fetch_post_json(+S, +Url, +ApiKey, +BodyText, -Codes) is det.
+%
+%   POST BodyText (already-serialized JSON) to Url, with an
+%   `Authorization: Bearer ApiKey` header when ApiKey is non-empty,
+%   returning the raw response body as a code list regardless of HTTP
+%   status (status_code/1 suppresses http_open/3's default
+%   throw-on-4xx/5xx so a provider's actual JSON error body -- e.g.
+%   "invalid_api_key" -- can be surfaced instead of a generic
+%   networking exception).
+http_fetch_post_json(S, Url, ApiKey, BodyText, Codes) :-
+    validate_adapter_url(S, Url),
+    (   ApiKey == "" -> AuthOpts = [] ; AuthOpts = [authorization(bearer(ApiKey))] ),
+    use_module(library(http/http_open)),
+    Limit is max(1000000, S.max_output_bytes),
+    setup_call_cleanup(
+        http_open(Url, In,
+                  [ post(atom(application/json, BodyText)),
+                    status_code(Status),
+                    timeout(60),
+                    size_limit(Limit),
+                    redirect(false)
+                  | AuthOpts
+                  ]),
+        read_stream_to_codes(In, Codes),
+        close(In)),
+    (   Status >= 200, Status < 300
+    ->  true
+    ;   string_codes(ErrText, Codes),
+        throw(error(adapter_error(_{status:Status, body:ErrText}), _))
     ).
 
 /* ---------------- repository context ---------------- */

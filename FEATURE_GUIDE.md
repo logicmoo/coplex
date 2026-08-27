@@ -5,30 +5,61 @@ next. It describes the known extension points, how to implement each
 optional feature safely, and the pitfalls already discovered in this
 codebase so they aren't re-learned the hard way.
 
-## 1. Real LLM adapter (replace/extend `http_json_adapter/3`)
+## 1. Real LLM adapter — **DONE** (`adapter(openai)` / `openai_chat_adapter/3`)
 
-`http_json_adapter(Url, Request, Reply)` already POSTs the normalized
-request JSON and parses a `{content, tool_calls}` reply, but it assumes
-the remote endpoint speaks the harness's own wire schema. Real
-providers (OpenAI-style chat completions, Anthropic messages API, etc.)
-need a small translation layer:
+`codex_harness.pl` now ships a complete, working translation adapter
+for OpenAI-compatible Chat Completions APIs (OpenAI itself, Azure
+OpenAI, and self-hosted servers speaking the same wire format --
+vLLM, Ollama's `/v1` shim, LM Studio, ...):
 
-- Write one adapter goal per provider, e.g. `openai_adapter(ApiKey, Model)`,
-  that:
-  1. builds the provider-specific JSON body from the harness `Request`
-     dict (`model`, `instructions`, `messages`, `tools`, `options`),
-  2. sets the `Authorization` header itself (never store the key in
-     harness state — pass it via a closure argument, e.g.
-     `adapter(openai_adapter(Key, "gpt-4o"))`),
-  3. maps the provider's tool-call format back into
-     `_{content, tool_calls:[_{id, name, arguments}]}`.
-- Register it the same way as any other adapter: `harness_new([adapter(openai_adapter(Key,Model)), ...], H)`.
-- Keep `wrap_adapter/3` untouched — it only special-cases `scripted`/`mock`;
-  anything else passes through as-is, so custom adapters need no core
-  changes.
-- Add a plunit test using a fake HTTP server (e.g. `library(http/http_server)`
-  bound to `localhost` on an ephemeral port) rather than a live provider,
-  so tests stay hermetic and offline.
+- Select it with `adapter(openai)` -- reachable both in-process
+  (`harness_new/2`) and, safely, over REST
+  (`POST /harnesses {"adapter": "openai", ...}` --
+  `coplex_server.pl`'s `sanitize_value/3` still only ever normalizes
+  `adapter` to one of a fixed, closed set of atoms).
+- Point it at a real endpoint with `adapter_url` (default the public
+  OpenAI endpoint) and authenticate with `adapter_api_key`
+  (sent as `Authorization: Bearer <key>`, never included in any
+  request/reply body). Both are plain safe-option-key text, unlike
+  `approval`/`on_event`/etc.
+- **The API key does live in harness state** (`adapter_api_key`) --
+  a deliberate change from the "pass it as a closure argument, never
+  store it" advice below, because a REST-created harness has no way
+  to receive a closure at all. The mitigation: it's auto-folded into
+  `secrets` (see `secrets_with_adapter_key/3`) so `redact_result/3`
+  scrubs it from any tool result or emitted event that might
+  accidentally echo it, and `harness_snapshot/2`/`harness_summary/2`
+  build an explicit field allowlist that never includes it, so it can
+  never come back out through any ordinary harness read.
+- `allow_network(true)` gates it exactly like `web_search`/`web_get`/
+  `download` -- reaching a real hosted LLM is real, costed network
+  egress. Unlike those tools, `validate_adapter_url/2` deliberately
+  does **not** block loopback/private-range hosts: `adapter_url` is
+  trusted, operator-set configuration (like `root`), not task/model-
+  controlled input, and a locally-hosted model server is a completely
+  ordinary value for it. `allowed_hosts`, if set, is still honored.
+- See `test/test_codex_harness.pl`'s `openai_adapter_full_tool_loop`
+  for the pattern this guide originally suggested: a real localhost
+  HTTP server standing in for the provider, driving a genuine
+  multi-turn tool-calling loop end-to-end with no live network egress.
+
+`http_json_adapter(Url, Request, Reply)` is unchanged and still useful
+for a provider (or in-house shim) that already speaks this harness's
+own `{content, tool_calls}` wire format directly. For a provider that
+speaks neither that nor the OpenAI shape (e.g. Anthropic's messages
+API), the same recipe still applies -- write one small translation
+adapter goal:
+
+- builds the provider-specific JSON body from the harness `Request`
+  dict (`model`, `instructions`, `messages`, `tools`, `options`),
+- sets the `Authorization` header itself,
+- maps the provider's tool-call format back into
+  `_{content, tool_calls:[_{id, name, arguments}]}`,
+
+and register it the same way as any built-in adapter --
+`harness_new([adapter(your_adapter(Key,Model)), ...], H)`; `wrap_adapter/3`
+passes anything it doesn't special-case straight through, so a
+fully custom adapter still needs zero core-module changes.
 
 ## 2. Minimal UI — **DONE** (`coplex_server.pl` + `plugin.py`)
 

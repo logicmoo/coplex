@@ -3,6 +3,9 @@
 :- use_module(library(plunit)).
 :- use_module(library(filesex)).
 :- use_module(library(uuid)).
+:- use_module(library(http/thread_httpd)).
+:- use_module(library(http/http_dispatch)).
+:- use_module(library(http/http_json)).
 
 :- begin_tests(codex_harness).
 
@@ -489,5 +492,151 @@ test(harness_list_tracks_live_instances) :-
                assertion(\+ memberchk(Id, After))
              )),
         cleanup_repo(Dir)).
+
+/* ---------------- openai_chat_adapter ---------------- */
+
+%   A minimal stand-in for a real OpenAI-compatible endpoint: a real
+%   localhost HTTP server (not a mock/stub function call), so these
+%   tests exercise the *entire* pipeline -- request translation, the
+%   actual HTTP POST with an Authorization header, response parsing,
+%   and the harness's own tool-execution loop -- exactly like talking
+%   to a real hosted model, without costing an API call or requiring
+%   network egress (staying within this file's "everything is
+%   hermetic" testing philosophy; see docs/06-testing.md).
+:- dynamic openai_stub_turn/1.
+:- dynamic openai_stub_auth/1.
+
+openai_stub_port(8798).
+
+start_openai_stub :-
+    retractall(openai_stub_turn(_)),
+    retractall(openai_stub_auth(_)),
+    asserta(openai_stub_turn(0)),
+    openai_stub_port(Port),
+    catch(http_stop_server(Port, []), _, true),
+    http_server(http_dispatch, [port(Port)]).
+
+stop_openai_stub :-
+    openai_stub_port(Port),
+    catch(http_stop_server(Port, []), _, true).
+
+openai_stub_url(Url) :-
+    openai_stub_port(Port),
+    format(atom(Url), 'http://localhost:~w/v1/chat/completions', [Port]).
+
+:- http_handler('/v1/chat/completions', openai_stub_handler, []).
+
+%   Turn 1: "decide" to call read_file(README.md); turn 2 (once it
+%   sees the tool result in the incoming messages): give a final
+%   plain-text answer. This proves the harness really drove a genuine
+%   multi-turn tool-calling loop against the wire format an actual
+%   OpenAI-compatible API uses (JSON-*string* `arguments`, `null`
+%   content alongside tool_calls, etc.), not just a single canned
+%   reply.
+openai_stub_handler(Request) :-
+    (   memberchk(authorization(Auth), Request)
+    ->  true
+    ;   Auth = none
+    ),
+    assertz(openai_stub_auth(Auth)),
+    http_read_json_dict(Request, _Body),
+    retract(openai_stub_turn(N0)),
+    N is N0 + 1,
+    asserta(openai_stub_turn(N)),
+    openai_stub_reply(N, Reply),
+    reply_json_dict(Reply).
+
+openai_stub_reply(1,
+    _{choices:[_{message:_{
+        role:"assistant", content:null,
+        tool_calls:[_{id:"call_1", type:"function",
+                      function:_{name:"read_file",
+                                 arguments:"{\"path\":\"README.md\"}"}}]}}]}) :- !.
+openai_stub_reply(_,
+    _{choices:[_{message:_{
+        role:"assistant", content:"Task complete: file has 2 lines."}}]}).
+
+test(openai_adapter_full_tool_loop) :-
+    tmp_repo(Dir),
+    openai_stub_url(Url),
+    setup_call_cleanup(
+        start_openai_stub,
+        openai_loop(Dir, Url),
+        (   stop_openai_stub,
+            cleanup_repo(Dir)
+        )).
+
+openai_loop(Dir, Url) :-
+    harness_new([root(Dir), adapter(openai), allow_network(true),
+                 allowed_hosts([localhost]),
+                 adapter_url(Url), adapter_api_key("sk-test-123")], H),
+    setup_call_cleanup(
+        true,
+        (   harness_run(H, "Read the README", Answer),
+            assertion(sub_string(Answer, _, _, _, "Task complete")),
+            assertion(openai_stub_turn(2)),
+        once(openai_stub_auth(SeenAuth)),
+            assertion(SeenAuth \== none),
+            harness_messages(H, Msgs),
+            assertion(is_list(Msgs)),
+            length(Msgs, L),
+            assertion(L >= 4)   % user + assistant(call) + tool + assistant(final)
+        ),
+        harness_close(H)).
+
+test(openai_adapter_requires_allow_network) :-
+    % adapter(openai) must not silently attempt a network call when
+    % allow_network is left at its (secure) default of false.
+    tmp_repo(Dir),
+    openai_stub_url(Url),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), adapter(openai), adapter_url(Url)],
+               network_off_adapter),
+        cleanup_repo(Dir)).
+
+network_off_adapter(H) :-
+    harness_run(H, "do something", Answer),
+    harness_snapshot(H, Snap),
+    assertion(sub_string(Answer, _, _, _, "Harness error")),
+    assertion(Snap.last_error.type == harness_error),
+    assertion(sub_string(Snap.last_error.message, _, _, _, "Network access is disabled")).
+
+test(openai_adapter_respects_allowed_hosts) :-
+    % adapter_url must be checked against allowed_hosts exactly like
+    % any other outbound URL a caller chooses to restrict.
+    tmp_repo(Dir),
+    openai_stub_url(Url),
+    setup_call_cleanup(
+        start_openai_stub,
+        disallowed_host_adapter(Dir, Url),
+        (   stop_openai_stub,
+            cleanup_repo(Dir)
+        )).
+
+disallowed_host_adapter(Dir, Url) :-
+    harness_new([root(Dir), adapter(openai), allow_network(true),
+                 allowed_hosts(['example.com']), adapter_url(Url)], H),
+    setup_call_cleanup(
+        true,
+        (   harness_run(H, "do something", Answer),
+            harness_snapshot(H, Snap),
+            assertion(sub_string(Answer, _, _, _, "Harness error")),
+            assertion(sub_string(Snap.last_error.message, _, _, _, "allowlist")),
+            assertion(openai_stub_turn(0))   % stub was never actually hit
+        ),
+        harness_close(H)).
+
+test(openai_json_schema_of_params) :-
+    % Pure translation check for the lightweight per-tool param dicts
+    % (see harness_tool_specs/1) -> JSON Schema, independent of any
+    % networking.
+    codex_harness:json_schema_of_params(
+        _{path:string, offset:integer, ok:boolean, args:list}, Schema),
+    assertion(Schema.type == "object"),
+    assertion(Schema.properties.path.type == "string"),
+    assertion(Schema.properties.offset.type == "integer"),
+    assertion(Schema.properties.ok.type == "boolean"),
+    assertion(Schema.properties.args.type == "array").
 
 :- end_tests(codex_harness).

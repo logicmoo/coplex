@@ -252,6 +252,32 @@ test(goal_shaped_options_are_ignored, [setup(setup_server), cleanup(teardown_ser
     assertion(Snap.ok == true),
     http_delete_json(ItemUrl, _).
 
+test(openai_adapter_selectable_and_key_not_leaked, [setup(setup_server), cleanup(teardown_server)]) :-
+    % adapter:"openai" (plus adapter_url/adapter_api_key) must be
+    % accepted -- this is the real-LLM-adapter surface -- but the API
+    % key must never come back out through any harness read, matching
+    % the "no secret ever reflected back" contract already covered by
+    % goal_shaped_options_are_ignored for approval/on_event/etc.
+    base_url(Base),
+    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    http_post_json(HarnessesUrl,
+                   _{root:".", adapter:"openai",
+                     adapter_url:"http://localhost:1/v1/chat/completions",
+                     adapter_api_key:"sk-should-never-leak"},
+                   Created),
+    assertion(Created.ok == true),
+    Id = Created.id,
+    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    http_get_json(ItemUrl, _{}, Snap),
+    assertion(Snap.ok == true),
+    term_string(Snap, SnapText),
+    assertion(\+ sub_string(SnapText, _, _, _, "sk-should-never-leak")),
+    http_get_json(HarnessesUrl, _{}, ListReply),
+    summary_for_id(ListReply.harnesses, Id, Summary),
+    term_string(Summary, SummaryText),
+    assertion(\+ sub_string(SummaryText, _, _, _, "sk-should-never-leak")),
+    http_delete_json(ItemUrl, _).
+
 test(cors_preflight_and_headers, [setup(setup_server), cleanup(teardown_server)]) :-
     % A browser-based UI on another origin sends an OPTIONS preflight
     % before its real POST/DELETE; the server must answer 200 with
