@@ -170,6 +170,12 @@ lifecycle hooks (`workbenchStartup`/`workbenchShutdown`) and exposes
 it through the plugin-api (`status`/`config`/`restart`/`shutdown`); see
 `plugin.json`. Manual equivalent: `python plugin.py start|stop|status|restart`.
 
+Every harness's state persists to `runtime/harnesses/<id>.json`
+(relative to this plugin's own directory) so it survives a restart --
+set `COPLEX_STATE_DIR` to relocate that directory. See "Disk-persisted,
+restart-durable harnesses" below for exactly what does and doesn't
+round-trip.
+
 Endpoints (JSON in, JSON out, except `/coplex` itself which is HTML).
 Every path below is shown in its canonical, documented `/coplex`-
 prefixed form; each also answers unprefixed at the bare root purely so
@@ -264,11 +270,23 @@ identically whether you load it directly
 mount. It carries no authentication of its own -- same security model
 as the rest of this API (see below).
 
-**Still not ported from `coplex_stdpy`'s console**: durable,
-disk-persisted tasks that survive a server restart. `coplex`'s
-harnesses (and their pending approvals) are in-memory only -- an
-`interactive`-mode call still paused when the server process exits is
-simply gone, not resumed on the next start.
+**Disk-persisted, restart-durable harnesses** (parity with
+`coplex_stdpy`'s console): every state change writes a full JSON
+snapshot to `runtime/harnesses/<id>.json` (configurable via
+`COPLEX_STATE_DIR`), and `server_start/2` restores every harness a
+previous process left behind before accepting traffic, so a harness
+genuinely survives a server restart -- its conversation, tool
+history, and last answer are all still there. A harness that was
+mid-run when the process stopped comes back `running: false` with an
+explanatory `last_error` (its execution thread can't be resumed, only
+its history recovered); a paused `approval_mode(interactive)` call is
+the one exception -- it's simply gone, same as before, since nothing
+can safely wait for a decision across a real process boundary.
+Secrets (`adapter_api_key`, `secrets`) and in-process-only hooks
+(`approval`, `on_event`, `web_search_backend`) are never written to
+disk and always come back reset after a restart. See
+`docs/02-harness-core.md` for the full field-by-field persistence
+contract.
 
 The JSON status/endpoint-list document that used to live at `GET
 /coplex` itself moved to `GET /coplex/endpoints` (and bare
@@ -399,9 +417,17 @@ Example: `swipl -s examples/example_codex_harness.pl -t halt`.
 - Unified-diff parser handles standard `---`/`+++`/`@@` hunks, not git
   binary patches or rename headers.
 - `web_search` requires an injected `web_search_backend/2` goal.
-- No bundled UI: the REST API above (async run, list summaries, CORS)
-  is designed to be driven by a separately-built web UI, not to ship
-  one itself.
+- A harness persists across a server restart (see "Disk-persisted,
+  restart-durable harnesses" above), but a call still paused in
+  `approval_mode(interactive)` at the moment the process stops does
+  not -- there's nothing that could safely resume waiting for a
+  decision across a real process boundary, so it's simply gone on the
+  next start, same as before this feature existed. A custom in-process
+  `adapter(Goal)`/`approval(Goal)`/`on_event(Goal)`/
+  `web_search_backend(Goal)` closure also can't survive a restart (only
+  the three built-in adapter selectors -- `scripted`, `mock`,
+  `openai` -- round-trip); a harness created with one of those comes
+  back with the hook reset to its default, not the original closure.
 
 ## Packaging
 

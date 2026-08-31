@@ -33,9 +33,12 @@ repository.
 
 A **harness** is a single Prolog object term `codex_harness(Id)` whose
 mutable state lives in a mutex-guarded dynamic fact
-(`harness_rec(Id, Mutex, StateDict)`) — there is no database, no
-external process per harness, and no persistence across a restart
-(beyond an optional JSONL transcript). Driving a harness means calling
+(`harness_rec(Id, Mutex, StateDict)`) — there is no database and no
+external process per harness, but every state change does write a full
+JSON snapshot to disk, so a harness *does* survive a server restart
+(see [02-harness-core.md](02-harness-core.md)'s "Disk persistence"
+section) -- a paused interactive-approval call is the one thing that
+doesn't. Driving a harness means calling
 `harness_run/4` (or its non-blocking sibling `harness_run_async/3`),
 which repeatedly asks a pluggable **adapter** goal for the next model
 response and executes any requested **tools** (file I/O, search,

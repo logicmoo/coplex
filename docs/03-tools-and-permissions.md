@@ -90,6 +90,17 @@ Three independent knobs, all must pass, plus per-tool self-checks:
    `allowed_tools`, `approval`, and `approval_mode` and still be
    refused here.
 
+A pending `approval_mode(interactive)` call does **not** survive a
+server restart. `pending_approval_rec/3` (the registry
+`wait_for_approval/6` blocks on) is purely in-memory and is
+deliberately never written by `persist_state/1` — even if it were,
+there would be no safe way to resume the *thread* that's actually
+blocked in `poll_approval/4` across a real process boundary. A restart
+simply loses the pause the same way it always did before disk
+persistence existed (see `docs/02-harness-core.md`'s "Disk persistence"
+section) — the harness itself, and everything it already did before
+that call, comes back; that one in-flight decision does not.
+
 ## Path safety
 
 Every tool that touches the filesystem resolves its path through

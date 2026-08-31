@@ -180,12 +180,20 @@ cors_origin_list(Raw, Origins) :-
 %
 %   Start the REST server bound to Host:Port.  Throws
 %   permission_error(start, server, already_running) if a server is
-%   already running in this process.
+%   already running in this process. Restores any harness a previous
+%   process persisted to disk (see codex_harness.pl's
+%   rehydrate_harnesses/0) *before* the listener comes up, so there's
+%   no window where the server answers requests without yet having
+%   loaded what survived the restart. Idempotent to call more than
+%   once across a process's lifetime (e.g. the test suite's
+%   setup_server/0 stops and restarts its own server per run) --
+%   rehydrate_harnesses/0 skips any harness id that's already live.
 server_start(Port, Host) :-
     (   running_port(_)
     ->  throw(error(permission_error(start, server, already_running), _))
     ;   true
     ),
+    rehydrate_harnesses,
     http_server(http_dispatch, [port(Port), ip(Host)]),
     asserta(running_port(Port)),
     debug(coplex_server, 'listening on ~w:~w', [Host, Port]).

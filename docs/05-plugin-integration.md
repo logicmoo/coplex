@@ -48,7 +48,7 @@ sequenceDiagram
 | `installAfter` | `install_after()` | Runs the core plunit suite (`test_codex_harness.pl`) as a post-install smoke test, so a broken checkout is caught immediately. |
 | `uninstall` | `uninstall()` | Makes sure the REST server isn't left running (`stop_server()`). |
 | `uninstallAfter` | `uninstall_after()` | No-op note: nothing is installed outside this plugin directory. |
-| `workbenchStartup` | `workbench_startup()` | Starts the **one shared** REST server for the whole workbench session (reads `COPLEX_HOST`/`COPLEX_PORT`). |
+| `workbenchStartup` | `workbench_startup()` | Starts the **one shared** REST server for the whole workbench session (reads `COPLEX_HOST`/`COPLEX_PORT`). `server_start/2` restores every harness a previous run persisted to disk before the server starts answering requests — see `docs/02-harness-core.md`'s "Disk persistence" section. |
 | `workbenchStartupAfter` | `workbench_startup_after()` | Returns `status()` so the host can immediately show plugin health. |
 | `workbenchShutdown` | `workbench_shutdown()` | Stops that shared server. |
 | `workbenchShutdownAfter` | `workbench_shutdown_after()` | `{ok:true}`. |

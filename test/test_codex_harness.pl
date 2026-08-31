@@ -7,6 +7,19 @@
 :- use_module(library(http/http_dispatch)).
 :- use_module(library(http/http_json)).
 
+% Every mutate/2 call now persists a JSON snapshot (see
+% codex_harness.pl's persist_state/1) unless redirected -- so this
+% suite must redirect it to a throwaway temp directory *before*
+% creating a single harness, or it would read/write the real
+% production runtime directory a live server might be using
+% concurrently. A fresh uuid-named directory per suite run keeps
+% consecutive runs from ever seeing each other's leftovers too.
+:- initialization(( current_prolog_flag(tmp_dir, Tmp),
+                     uuid(StateUid),
+                     directory_file_path(Tmp, StateUid, StateDir),
+                     set_coplex_state_dir(StateDir)
+                   )).
+
 :- begin_tests(codex_harness).
 
 tmp_repo(Dir) :-
@@ -791,5 +804,169 @@ test(approval_unknown_call_id_errors, [error(existence_error(pending_approval, "
 
 unknown_call_id(H) :-
     harness_decide_approval(H, "does-not-exist", allow).
+
+% -- disk persistence (survive a server restart) ----------------------
+%
+% This whole file's coplex_state_dir is already redirected to an
+% isolated temp directory by the :- initialization/1 directive near
+% the top -- every test below shares that one directory (a fresh
+% per-harness uuid filename means no collision), so none of these
+% need their own setup for that part. rehydrate_harnesses/0,
+% harness_state_file/2, and mutate/2 aren't part of this module's
+% public API (see the export list) -- these tests reach them via
+% module-qualification the same way openai_json_schema_of_params
+% above already reaches codex_harness:json_schema_of_params/2, since
+% this *is* the whitebox test suite for codex_harness itself.
+
+state_file_for(codex_harness(Id), File) :-
+    codex_harness:harness_state_file(Id, File).
+
+forget_in_memory(codex_harness(Id)) :-
+    codex_harness:harness_rec(Id, Mutex, _),
+    retractall(codex_harness:harness_rec(Id, _, _)),
+    catch(mutex_destroy(Mutex), _, true).
+
+force_running_true(codex_harness(Id)) :-
+    codex_harness:mutate(Id, start_run("simulated in-flight task")).
+
+same_text(A, B) :- atom_string(A, S), atom_string(B, S), !.
+
+test(persist_writes_json_file) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), adapter(scripted),
+                mock_replies([_{content:"hi", tool_calls:[]}])],
+               persist_writes),
+        cleanup_repo(Dir)).
+
+persist_writes(H) :-
+    harness_run(H, "say hi", _),
+    state_file_for(H, File),
+    assertion(exists_file(File)).
+
+test(persist_never_writes_secrets) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), adapter(openai), allow_network(true),
+                adapter_api_key("sk-super-secret-value")],
+               persist_no_secrets),
+        cleanup_repo(Dir)).
+
+persist_no_secrets(H) :-
+    harness_tool(H, git_status, _{}, _),
+    state_file_for(H, File),
+    read_file_to_string(File, Text, []),
+    assertion(\+ sub_string(Text, _, _, _, "sk-super-secret-value")).
+
+test(harness_close_deletes_persisted_file) :-
+    tmp_repo(Dir),
+    harness_new([root(Dir)], H),
+    harness_tool(H, git_status, _{}, _),
+    state_file_for(H, File),
+    assertion(exists_file(File)),
+    harness_close(H),
+    assertion(\+ exists_file(File)),
+    cleanup_repo(Dir).
+
+test(rehydrate_restores_messages_and_answer) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), adapter(scripted),
+                mock_replies([_{content:"final answer", tool_calls:[]}])],
+               rehydrate_restores),
+        cleanup_repo(Dir)).
+
+rehydrate_restores(H) :-
+    harness_run(H, "do the thing", Answer),
+    harness_snapshot(H, SnapBefore),
+    % Simulate a process restart: forget the in-memory fact WITHOUT
+    % deleting the disk file, then rehydrate.
+    forget_in_memory(H),
+    rehydrate_harnesses,
+    harness_snapshot(H, SnapAfter),
+    assertion(same_text(SnapAfter.last_answer, Answer)),
+    length(SnapAfter.messages, Len),
+    length(SnapBefore.messages, Len0),
+    assertion(Len == Len0),
+    assertion(SnapAfter.running == false).
+
+test(rehydrate_marks_interrupted_run) :-
+    tmp_repo(Dir),
+    harness_new([root(Dir)], H),
+    force_running_true(H),
+    forget_in_memory(H),
+    rehydrate_harnesses,
+    harness_snapshot(H, Snap),
+    assertion(Snap.running == false),
+    assertion(Snap.last_error.type == harness_error),
+    assertion(sub_atom(Snap.last_error.message, _, _, _, restart)),
+    harness_close(H),
+    cleanup_repo(Dir).
+
+test(rehydrate_is_idempotent) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir)], rehydrate_idempotent),
+        cleanup_repo(Dir)).
+
+rehydrate_idempotent(H) :-
+    harness_tool(H, git_status, _{}, _),
+    rehydrate_harnesses,
+    rehydrate_harnesses,
+    harness_list(Ids),
+    H = codex_harness(Id),
+    include(==(Id), Ids, Matches),
+    length(Matches, 1).
+
+test(rehydrated_harness_stays_functional) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), adapter(scripted),
+                mock_replies([_{content:"first run", tool_calls:[]}])],
+               rehydrated_still_works),
+        cleanup_repo(Dir)).
+
+rehydrated_still_works(H) :-
+    harness_run(H, "one", _),
+    forget_in_memory(H),
+    rehydrate_harnesses,
+    % A rehydrated scripted-adapter harness already consumed its
+    % original mock_replies, so drive it via harness_tool/4 instead of
+    % a second harness_run/3 -- this still proves the adapter is
+    % genuinely live (adapter_kind round-tripped through
+    % wrap_adapter/3), not a dead placeholder.
+    harness_tool(H, git_status, _{}, Result),
+    assertion(Result.ok == true).
+
+test(rehydrate_preserves_sentinel_option_values) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir)], rehydrate_sentinels),
+        cleanup_repo(Dir)).
+
+rehydrate_sentinels(H) :-
+    % allowed_tools defaults to `all`, transcript defaults to `none` --
+    % both come back from disk as JSON *strings* unless
+    % rehydrate_harnesses/0 reads them back as atoms
+    % (json_read_dict/3's value_string_as(atom)), which is exactly the
+    % bug this guards against: allowed_tool_name/2 checks
+    % `S.allowed_tools == all` and persist_msg/2 checks
+    % `S.transcript == none`, both plain atom `==/2` comparisons that
+    % would silently break (denying every tool / trying to open a file
+    % literally named "none") if either sentinel came back as a string.
+    harness_tool(H, git_status, _{}, R0),
+    assertion(R0.ok == true),
+    forget_in_memory(H),
+    rehydrate_harnesses,
+    harness_tool(H, git_status, _{}, R1),
+    assertion(R1.ok == true),
+    harness_tool(H, write_file, _{path:"s.txt", content:"x"}, R2),
+    assertion(R2.ok == true).
 
 :- end_tests(codex_harness).

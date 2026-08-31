@@ -148,6 +148,30 @@ hook is configured. See the security model below for why
 `approval_mode`/`approval_timeout` are safe to accept from REST JSON
 while `approval(Goal)` itself never is.
 
+### Disk persistence
+
+Every harness created through this API survives a server restart: any
+state change writes a full JSON snapshot to
+`<coplex_state_dir>/<id>.json` (default `runtime/harnesses/`, relative
+to this plugin's own directory — override with `COPLEX_STATE_DIR`),
+and `server_start/2` restores every snapshot it finds *before* the HTTP
+listener comes up, so there's no window where the server answers
+requests without having loaded what a previous process left behind. A
+client polling `GET /coplex/harnesses/<id>` across a restart sees the
+same `id`, `messages`, `tool_activity`, and `last_answer` it did
+before. Two things do **not** survive: a harness that was mid-run
+(`running: true`) at the moment the process stopped comes back
+`running: false` with `last_error` overwritten to say it was
+interrupted (the thread that was running it is gone — only its
+history is recoverable, not its execution), and a call paused in
+`approval_mode(interactive)` is simply gone (there's no safe way to
+resume a thread blocked on a REST decision across a real process
+boundary — see [03-tools-and-permissions.md](03-tools-and-permissions.md)).
+Secrets (`adapter_api_key`, the harness's `secrets` list) and
+in-process-only hooks (`approval`, `on_event`, `web_search_backend`)
+are never written to disk and always come back at their default after
+a restart — see [02-harness-core.md](02-harness-core.md)'s
+field-by-field table for the complete picture.
 
 ### Direct tool calls (`GET /coplex/tools` endpoint field)
 

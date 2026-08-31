@@ -74,14 +74,27 @@ SWI-Prolog dict, held in one dynamic fact per instance:
   cycle. This is what makes it safe to poll `harness_snapshot/2` from
   one thread while an async run mutates state from another (see
   [02-harness-core.md](02-harness-core.md)).
-- **Destruction** (`harness_close/1`) retracts the fact and destroys
-  the mutex. Nothing survives a process restart — a harness is a
-  purely in-memory session object, not a durable record.
-- The one optional durability mechanism is `transcript(Path)`: every
-  message appended to the conversation is also appended as one JSON
-  line to that file (`persist_msg/2`), independent of the in-memory
-  state, so you can recover a human-readable audit trail even if the
-  process is later killed.
+- **Every write also persists.** After the in-memory fact is updated,
+  `mutate/2` rewrites this harness's full state to
+  `<coplex_state_dir>/<id>.json` (`persist_state/1`) — a genuine
+  disk-backed durable record, not just the audit trail below.
+  `server_start/2` restores every such snapshot
+  (`rehydrate_harnesses/0`) before accepting requests, so a harness
+  *does* survive a process restart now — its conversation, tool
+  history, and last answer come back; a call still paused in
+  `approval_mode(interactive)`, and anything goal-shaped
+  (`approval`/`on_event`/`web_search_backend`) or secret
+  (`adapter_api_key`/`secrets`), do not — see
+  [02-harness-core.md](02-harness-core.md)'s "Disk persistence" section
+  for the exact field-by-field contract.
+- **Destruction** (`harness_close/1`) retracts the fact, destroys the
+  mutex, *and* deletes the persisted JSON file — a destroyed harness is
+  gone for good, not merely forgotten from memory.
+- A second, independent, opt-in durability mechanism still exists on
+  top of the above: `transcript(Path)`. Every message appended to the
+  conversation is also appended as one JSON line to that file
+  (`persist_msg/2`), for a human-readable audit trail at a path of your
+  choosing, separate from the structured `<id>.json` snapshot above.
 
 ```mermaid
 stateDiagram-v2
@@ -94,8 +107,9 @@ stateDiagram-v2
     Running --> Idle: adapter/timeout error
     Running --> Running: second run/4 while\nalready running is REJECTED\n(HTTP 409, state untouched)
     Idle --> Idle: harness_reset/1\n(clears messages, keeps config)
-    Idle --> Closed: harness_close/1
+    Idle --> Closed: harness_close/1\n(also deletes persisted state)
     Closed --> [*]
+    Idle --> Idle: process restart\n(rehydrate_harnesses/0 --\nrunning would force to Idle\nwith an interrupted-run error)
 ```
 
 ## Concurrency model

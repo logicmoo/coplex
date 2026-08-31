@@ -262,3 +262,71 @@ which — only if `transcript(Path)` was set — appends one JSON line
 (`{..., ts:UnixTime}`) to that file. This is independent of the
 in-memory `messages` list and survives even if the process is killed
 mid-run.
+
+## Disk persistence (surviving a restart)
+
+Distinct from, and always-on unlike, the opt-in `transcript` above:
+every `mutate/2` call — not just new messages — rewrites this
+harness's *entire* current state to one JSON file,
+`<coplex_state_dir>/<id>.json` (`persist_state/1`), replacing whatever
+was there before. A full-snapshot rewrite rather than an
+incremental/JSONL append keeps `rehydrate_harnesses/0` trivial: read
+one file, done, no replay logic. `coplex_state_dir/1` defaults to
+`./runtime/harnesses` (resolved relative to the process's current
+directory — `plugin.py` always launches `swipl` with this plugin's own
+directory as cwd), overridable via the `COPLEX_STATE_DIR` environment
+variable or, for tests, `set_coplex_state_dir/1` (both test files
+redirect this to an isolated temp directory at load time so a test run
+never touches the real production directory). A write failure (disk
+full, permission denied, ...) is caught and merely logged — persistence
+is a best-effort durability layer, never a correctness dependency of
+the agent loop that triggered it. `harness_close/1` deletes the file,
+so a destroyed harness doesn't reappear on the next restart.
+
+`rehydrate_harnesses/0` scans that directory and re-asserts a
+`harness_rec/3` (with a fresh mutex — mutexes don't survive a process
+restart either) for each `<id>.json` it finds, skipping any id already
+live and logging (not raising) a problem with any individual file so
+one corrupt snapshot can't block every other harness coming back.
+It's called exactly once, by `server_start/2`, *before* the HTTP
+listener starts — never automatically on module load, since
+`codex_harness.pl` is a plain library usable with no server at all
+(see the module docstring), and auto-rehydrating on load would mean a
+test suite merely `use_module`-ing this file could pick up, and start
+writing into, the real production runtime directory.
+
+Not every field round-trips — some are deliberately excluded from the
+JSON and reset to a safe default on rehydration instead:
+
+| Field(s) | On disk | After rehydration |
+|---|---|---|
+| `adapter_api_key`, `secrets` | never written (may hold a live plaintext secret) | `""` / `[]` |
+| `approval`, `on_event`, `web_search_backend` | never written (goal-shaped, in-process only) | `none` |
+| `adapter` | never written (a *wrapped* closure, e.g. `scripted_adapter(Id)`, not plain data) | re-derived from the persisted `adapter_kind` via `wrap_adapter/3` |
+| `adapter_kind` | the pre-`wrap_adapter/3` selector (`scripted`/`mock`/`openai`) | restored verbatim, unless the original was a custom in-process adapter closure, which persists as a safe `scripted` fallback |
+| `fail_signatures`, `call_seq`, `subagents` | never written (pure in-run bookkeeping) | their `harness_new/2` defaults (`[]`, `0`, `[]`) |
+| `running` | whatever it was at the last mutate/2 | forced `false`; if it *was* `true`, `last_error` is overwritten to say the run was interrupted by a restart (the thread that ran it is gone — only its history is recoverable) |
+| everything else — `messages`, `tool_activity`, `current_task`, `last_answer`, `last_error` (when `running` wasn't `true`), every capability flag/allowlist, `approval_mode`/`approval_timeout`, `root`/`cwd`/`model`/`instructions`, `created_at`, ... | written verbatim | restored verbatim |
+
+A pending approval (`approval_mode(interactive)`) does **not** survive
+a restart — there's no way to safely resume a thread waiting on a REST
+decision across a real process boundary, so it's simply gone (its
+`pending_approval_rec/3` fact was never persisted in the first place;
+see `docs/03-tools-and-permissions.md`).
+
+One subtlety worth knowing if you touch this code: `json_read_dict/3`
+decodes JSON string values as Prolog *strings* by default, but this
+codebase represents sentinel/enum values (`none`, `all`, `auto`, tool
+names) as *atoms* everywhere, and checks them with plain `==/2`
+(`S.allowed_tools == all`, `S.transcript == none`, ...) — a naive
+rehydration would read those back as same-text but different-typed
+*strings*, silently breaking every such check (denying every tool,
+mistreating a real path as the literal name "none", ...).
+`rehydrate_harnesses/0` reads with `json_read_dict(In, Dict,
+[value_string_as(atom)])` instead, which decodes every string
+(including genuine free text like message content) as an atom — safe
+here since every text predicate this codebase actually uses accepts
+atoms and strings interchangeably as input. See `FEATURE_GUIDE.md`'s
+pitfall list for the fuller writeup.
+
+

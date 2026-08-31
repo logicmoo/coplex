@@ -18,6 +18,17 @@
 :- use_module(library(http/json)).
 :- use_module(library(http/http_json)).
 :- use_module(library(filesex)).
+:- use_module(library(uuid)).
+
+% server_start/2 now calls rehydrate_harnesses/0 (see codex_harness.pl)
+% on every setup_server/0 in this suite, so persistence must be
+% redirected to a throwaway temp directory before any test runs --
+% same reasoning as test_codex_harness.pl's equivalent directive.
+:- initialization(( current_prolog_flag(tmp_dir, Tmp),
+                     uuid(StateUid),
+                     directory_file_path(Tmp, StateUid, StateDir),
+                     set_coplex_state_dir(StateDir)
+                   )).
 
 :- begin_tests(codex_harness_server).
 
@@ -393,11 +404,32 @@ http_post_json_status(Url, Body, Reply, Code) :-
         json_read_dict(In, Reply),
         close(In)).
 
+%!  tmp_root(-Dir) is det.
+%   A fresh, empty temp directory for the one test that calls it --
+%   write_file over REST needs somewhere writable, and unlike this
+%   file's many read-only-tool tests, root:"." would actually leave a
+%   stray file behind in this very repo checkout.
+tmp_root(Dir) :-
+    current_prolog_flag(tmp_dir, Tmp),
+    uuid(Id),
+    directory_file_path(Tmp, Id, Dir),
+    make_directory(Dir).
+
+cleanup_tmp_root(Dir) :-
+    catch(delete_directory_and_contents(Dir), _, true).
+
 test(approval_over_rest_allow, [setup(setup_server), cleanup(teardown_server)]) :-
+    tmp_root(Root),
+    setup_call_cleanup(
+        true,
+        approval_over_rest_allow_(Root),
+        cleanup_tmp_root(Root)).
+
+approval_over_rest_allow_(Root) :-
     base_url(Base),
     atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_post_json(HarnessesUrl,
-                   _{root:".", approval_mode:"interactive", approval_timeout:10},
+                   _{root:Root, approval_mode:"interactive", approval_timeout:10},
                    Created),
     Id = Created.id,
     format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
@@ -417,10 +449,17 @@ test(approval_over_rest_allow, [setup(setup_server), cleanup(teardown_server)]) 
     http_delete_json(ItemUrl, _).
 
 test(approval_over_rest_deny, [setup(setup_server), cleanup(teardown_server)]) :-
+    tmp_root(Root),
+    setup_call_cleanup(
+        true,
+        approval_over_rest_deny_(Root),
+        cleanup_tmp_root(Root)).
+
+approval_over_rest_deny_(Root) :-
     base_url(Base),
     atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_post_json(HarnessesUrl,
-                   _{root:".", approval_mode:"interactive", approval_timeout:10},
+                   _{root:Root, approval_mode:"interactive", approval_timeout:10},
                    Created),
     Id = Created.id,
     format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
@@ -455,9 +494,16 @@ test(approval_mode_deny_risky_over_rest, [setup(setup_server), cleanup(teardown_
     % other safe_option_key/1 -- checked end-to-end via observable
     % behaviour (an immediate denial), not just that harness creation
     % succeeds, since creation never echoes options back.
+    tmp_root(Root),
+    setup_call_cleanup(
+        true,
+        approval_mode_deny_risky_over_rest_(Root),
+        cleanup_tmp_root(Root)).
+
+approval_mode_deny_risky_over_rest_(Root) :-
     base_url(Base),
     atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
-    http_post_json(HarnessesUrl, _{root:".", approval_mode:"deny_risky"}, Created),
+    http_post_json(HarnessesUrl, _{root:Root, approval_mode:"deny_risky"}, Created),
     assertion(Created.ok == true),
     Id = Created.id,
     format(atom(ToolUrl), '~w/coplex/harnesses/~w/tools/write_file', [Base, Id]),
@@ -466,5 +512,63 @@ test(approval_mode_deny_risky_over_rest, [setup(setup_server), cleanup(teardown_
     assertion(Reply.error.type == "denied"),
     format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
     http_delete_json(ItemUrl, _).
+
+test(harness_survives_a_simulated_server_restart) :-
+    % A real process restart doesn't just stop the HTTP listener -- it
+    % also wipes every in-memory harness_rec/3 fact, which server_stop
+    % alone can't reproduce inside one long-lived test process. So this
+    % also forgets the in-memory fact directly (module-qualified --
+    % harness_rec/3 isn't part of codex_harness's public API, same as
+    % the equivalent whitebox tests in test_codex_harness.pl), leaving
+    % ONLY what persist_state/1 already wrote to disk, before
+    % restarting the server and confirming GET /coplex/harnesses/<id>
+    % still works -- this is the same durability guarantee proven at
+    % the Prolog level in test_codex_harness.pl's
+    % rehydrate_restores_messages_and_answer, but exercised through a
+    % genuine stop/start of the real HTTP server. The server is
+    % managed by hand (not the usual setup(setup_server)/
+    % cleanup(teardown_server) test options) since the test itself
+    % needs to stop and restart it partway through; the outer
+    % setup_call_cleanup/3 still guarantees a final server_stop and
+    % temp-directory cleanup even if an assertion fails midway.
+    tmp_root(Root),
+    setup_call_cleanup(
+        true,
+        harness_survives_restart_(Root),
+        ( catch(server_stop, _, true),
+          cleanup_tmp_root(Root)
+        )).
+
+harness_survives_restart_(Root) :-
+    setup_server,
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
+    http_post_json(HarnessesUrl,
+                   _{root:Root, adapter:"scripted",
+                     mock_replies:[_{content:"before restart", tool_calls:[]}]},
+                   Created),
+    assertion(Created.ok == true),
+    Id = Created.id,
+    format(atom(RunUrl), '~w/coplex/harnesses/~w/run', [Base, Id]),
+    http_post_json(RunUrl, _{task:"say hi"}, RunReply),
+    assertion(RunReply.ok == true),
+    assertion(RunReply.answer == "before restart"),
+    server_stop,
+    forget_harness_rec(Id),
+    test_port(Port),
+    server_start(Port, localhost),
+    wait_healthy(Port, 50),
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
+    http_get_json(ItemUrl, _{}, SnapAfter),
+    assertion(SnapAfter.ok == true),
+    assertion(SnapAfter.last_answer == "before restart"),
+    assertion(SnapAfter.running == false),
+    http_delete_json(ItemUrl, _).
+
+forget_harness_rec(IdAtomOrString) :-
+    atom_string(Id, IdAtomOrString),
+    codex_harness:harness_rec(Id, Mutex, _),
+    retractall(codex_harness:harness_rec(Id, _, _)),
+    catch(mutex_destroy(Mutex), _, true).
 
 :- end_tests(codex_harness_server).

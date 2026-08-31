@@ -16,7 +16,10 @@
             harness_decide_approval/3,
             scripted_adapter/3,
             http_json_adapter/3,
-            openai_chat_adapter/3
+            openai_chat_adapter/3,
+            set_coplex_state_dir/1,
+            coplex_state_dir/1,
+            rehydrate_harnesses/0
           ]).
 
 /** <module> Codex/Copilot-style coding-agent harness
@@ -53,6 +56,14 @@ Safe default for `subagents`: concurrent analysis only.  Editing, shell,
 and network tools are denied in child harnesses unless
 `subagent_allow_writes(true)` is set.  That avoids conflicting writes
 without requiring Git worktrees.
+
+Every state change persists a full JSON snapshot to disk (see
+`coplex_state_dir/1`, `persist_state/1`) so a harness survives a real
+process restart; call `rehydrate_harnesses/0` once, before accepting
+any traffic, to restore whatever a previous process left behind (see
+`coplex_server.pl`'s `server_start/2`). This is a plain library, not a
+server -- merely loading this module never touches disk on its own;
+`rehydrate_harnesses/0` is never called automatically on load.
 
 @see README.md
 */
@@ -174,7 +185,7 @@ harness_new(Options, codex_harness(Id)) :-
     text_of(ApiKey0, ApiKey),
     secrets_with_adapter_key(Secrets0, ApiKey, Secrets),
     State = _{
-        id:Id, adapter:Adapter, model:Model,
+        id:Id, adapter:Adapter, adapter_kind:Adapter0, model:Model,
         instructions:Instr, extra_instructions:Extra,
         root:Root, cwd:Cwd, messages:[],
         cancelled:false, running:false,
@@ -269,11 +280,23 @@ harness_close(codex_harness(Id)) :-
     ->  deny_all_pending_approvals(Id),
         with_mutex(Mutex,
                    (   retractall(harness_rec(Id, _, _)),
-                       catch(mutex_destroy(Mutex), _, true)))
+                       catch(mutex_destroy(Mutex), _, true))),
+        delete_persisted_state(Id)
     ;   true
     ).
 harness_close(Other) :-
     type_error(codex_harness, Other).
+
+%!  delete_persisted_state(+Id) is det.
+%   harness_close/1 destroys the instance outright, so its on-disk
+%   snapshot (see persist_state/1) should go with it -- otherwise a
+%   deleted harness would reappear the next time
+%   rehydrate_harnesses/0 runs. A missing/already-gone file is not an
+%   error (harness_state_file/2 never guarantees the file exists --
+%   e.g. a harness that never had a single mutate/2 call yet).
+delete_persisted_state(Id) :-
+    harness_state_file(Id, File),
+    catch(delete_file(File), _, true).
 
 %!  harness_cancel(+Harness) is det.
 harness_cancel(codex_harness(Id)) :-
@@ -1958,7 +1981,8 @@ mutate(Id, Action) :-
     with_mutex(Mutex,
                (   retract(harness_rec(Id, Mutex, S0)),
                    apply_mut(Action, S0, S1),
-                   assertz(harness_rec(Id, Mutex, S1)))).
+                   assertz(harness_rec(Id, Mutex, S1)),
+                   persist_state(S1))).
 
 apply_mut(cancel, S0, S1) :-
     S1 = S0.put(cancelled, true).
@@ -1971,7 +1995,6 @@ apply_mut(start_run(Task), S0, S1) :-
     S1 = S0.put(_{running:true, current_task:T, cancelled:false, last_error:null}).
 apply_mut(finish_run(Answer), S0, S1) :-
     text_of(Answer, A),
-    persist_if(S0),
     S1 = S0.put(_{running:false, last_answer:A}).
 apply_mut(set_iteration(I), S0, S1) :-
     S1 = S0.put(iteration, I).
@@ -1988,7 +2011,235 @@ apply_mut(add_fail_sigs(Sigs), S0, S1) :-
     append(S0.fail_signatures, Sigs, All),
     S1 = S0.put(fail_signatures, All).
 
-persist_if(_).
+/* ---------------- disk persistence (survive a server restart) ------ */
+%
+%   Every mutate/2 call (i.e. every state change -- a new message, a
+%   tool result, a run starting/finishing, a cancel/reset, ...)
+%   rewrites this harness's *entire* current state to one JSON file,
+%   <coplex_state_dir>/<id>.json, replacing whatever was there before.
+%   A full-snapshot rewrite (not an incremental/JSONL append) keeps
+%   rehydrate_harnesses/0 trivial -- read one file, done, no replay
+%   logic -- at the cost of rewriting the full (typically small)
+%   history on every step; that trade already exists for the opt-in
+%   transcript(Path) option (persist_msg/2 below) and has never been a
+%   problem in practice for an agent loop's step counts.
+%
+%   Deliberately *never* persisted (see harness_to_persistable_dict/2
+%   for the exact field list):
+%     - `adapter_api_key`, `secrets` -- may hold a live plaintext
+%       secret (secrets_with_adapter_key/3); every other read path in
+%       this codebase already treats "never let a secret reach
+%       disk/output" as an invariant (redact_result/3, the REST
+%       snapshot/summary field allowlists) and persistence keeps that
+%       invariant rather than carving out an exception for disk.
+%     - `approval`, `on_event`, `web_search_backend` -- goal-shaped,
+%       in-process only; meaningless after a real process restart
+%       (the predicate they close over may not even be loaded in the
+%       next process) and always reset to `none` on rehydration.
+%     - `adapter` itself -- a *wrapped* closure like
+%       `scripted_adapter(Id)`, not plain data. `adapter_kind` (the
+%       pre-wrap_adapter/3 selector, e.g. `openai`) is persisted
+%       instead, and rehydrate_harnesses/0 re-derives `adapter` from it.
+%     - `fail_signatures`, `call_seq`, `subagents` -- pure in-run
+%       bookkeeping with no meaning once nothing is actually running;
+%       always reset to their harness_new/2 defaults.
+
+:- dynamic coplex_state_dir_override/1.
+
+%!  coplex_state_dir(-Dir) is det.
+%   The directory persisted harness JSON files live under, as an
+%   absolute path (existence not required -- persist_state/1 creates
+%   it on first write). Checked fresh on every call, not cached, so
+%   set_coplex_state_dir/1 (used by the test suites to redirect this
+%   away from the real runtime directory -- see test_codex_harness.pl)
+%   takes effect immediately, and so COPLEX_STATE_DIR is honored even
+%   if set after this module is loaded. Falls back to
+%   `./runtime/harnesses`, resolved relative to the process's current
+%   directory -- `plugin.py` always launches swipl with this plugin's
+%   own directory as cwd, so the production default lands at
+%   `<coplex plugin dir>/runtime/harnesses` with no extra
+%   configuration.
+coplex_state_dir(Dir) :-
+    coplex_state_dir_override(Dir0),
+    !,
+    Dir = Dir0.
+coplex_state_dir(Dir) :-
+    (   getenv('COPLEX_STATE_DIR', Dir0)
+    ->  true
+    ;   Dir0 = './runtime/harnesses'
+    ),
+    absolute_file_name(Dir0, Dir).
+
+%!  set_coplex_state_dir(+Dir) is det.
+%   Overrides coplex_state_dir/1's result for the rest of this
+%   process's lifetime (there is deliberately no "unset" -- nothing in
+%   this codebase needs to revert it once set). `Dir` is resolved to
+%   an absolute path immediately, so a later change of the process's
+%   current directory can't retroactively change where persistence
+%   goes mid-run.
+set_coplex_state_dir(Dir0) :-
+    absolute_file_name(Dir0, Dir),
+    retractall(coplex_state_dir_override(_)),
+    assertz(coplex_state_dir_override(Dir)).
+
+%!  harness_state_file(+Id, -File) is det.
+harness_state_file(Id, File) :-
+    coplex_state_dir(Dir),
+    format(atom(Name), '~w.json', [Id]),
+    directory_file_path(Dir, Name, File).
+
+%!  harness_to_persistable_dict(+State, -Dict) is det.
+%   See the module-section comment above for exactly what's excluded
+%   and why. `adapter_kind` is only ever safe to persist if it's one
+%   of the three built-in, closed-vocabulary selectors -- an in-process
+%   caller can hand harness_new/2 an arbitrary custom adapter closure
+%   as `adapter(Goal)` directly (never reachable from REST -- see
+%   coplex_server.pl's sanitize_value/3 -- but legal for a direct,
+%   embedding caller), and that closure is exactly as unrestorable
+%   after a real process restart as `approval(Goal)`/`on_event(Goal)`
+%   are, for the same reason (the predicate it closes over may not
+%   even be loaded in the next process).
+harness_to_persistable_dict(State, Dict) :-
+    ( memberchk(State.adapter_kind, [scripted, mock, openai])
+    -> AdapterKind = State.adapter_kind
+    ;  AdapterKind = scripted
+    ),
+    Dict = _{
+        id:State.id,
+        adapter_kind:AdapterKind,
+        model:State.model,
+        instructions:State.instructions,
+        extra_instructions:State.extra_instructions,
+        root:State.root, cwd:State.cwd,
+        messages:State.messages,
+        cancelled:State.cancelled, running:State.running,
+        current_task:State.current_task, iteration:State.iteration,
+        last_answer:State.last_answer, last_error:State.last_error,
+        tool_activity:State.tool_activity,
+        max_steps:State.max_steps, timeout:State.timeout,
+        command_timeout:State.command_timeout,
+        max_output_bytes:State.max_output_bytes,
+        max_download_bytes:State.max_download_bytes,
+        allow_shell:State.allow_shell,
+        allow_network:State.allow_network,
+        allow_shell_string:State.allow_shell_string,
+        allowed_hosts:State.allowed_hosts,
+        writable_paths:State.writable_paths,
+        readable_paths:State.readable_paths,
+        subagent_limit:State.subagent_limit,
+        subagent_allow_writes:State.subagent_allow_writes,
+        approval_mode:State.approval_mode,
+        approval_timeout:State.approval_timeout,
+        transcript:State.transcript,
+        default_test_command:State.default_test_command,
+        mock_script:State.mock_script,
+        parent:State.parent,
+        allowed_tools:State.allowed_tools,
+        adapter_url:State.adapter_url,
+        created_at:State.created_at
+    }.
+
+%!  persist_state(+State) is det.
+%   Rewrites this harness's on-disk JSON snapshot. A write failure
+%   (disk full, permission denied, directory deleted out from under
+%   us, ...) must never break the agent loop that triggered it, so
+%   every step is wrapped in catch/3 and merely logged under the
+%   codex_harness debug topic -- persistence is a best-effort durability
+%   layer, not a correctness dependency of any in-memory operation.
+%   Writes to a `.tmp` file and renames it into place afterwards so a
+%   crash mid-write can never leave a half-written, unparseable
+%   snapshot for rehydrate_harnesses/0 to trip over.
+persist_state(State) :-
+    catch(persist_state_(State), Error,
+          debug(codex_harness, 'persist_state failed for ~w: ~q', [State.id, Error])).
+
+persist_state_(State) :-
+    coplex_state_dir(Dir),
+    make_directory_path(Dir),
+    harness_state_file(State.id, File),
+    atom_concat(File, '.tmp', TmpFile),
+    harness_to_persistable_dict(State, Dict),
+    setup_call_cleanup(
+        open(TmpFile, write, Out, [encoding(utf8)]),
+        json_write_dict(Out, Dict, [width(0)]),
+        close(Out)),
+    rename_file(TmpFile, File).
+
+%!  rehydrate_harnesses is det.
+%
+%   Scans coplex_state_dir/1 for `<id>.json` snapshots left behind by
+%   a previous process (see persist_state/1) and re-asserts a
+%   harness_rec/3 fact for each, so harnesses genuinely survive a
+%   server restart. Intended to be called exactly once, by
+%   server_start/2, *not* automatically on module load -- codex_harness
+%   is a plain library usable without any server at all (see the
+%   module docstring), and auto-rehydrating on load would mean simply
+%   `use_module`-ing this file (e.g. from a test suite) could pick up
+%   -- and start writing into -- whatever the real production runtime
+%   directory happens to contain. Each file is handled independently
+%   under its own catch/3: one corrupt/unreadable snapshot must not
+%   stop every other harness from coming back.
+%
+%   A harness whose persisted `running` was `true` genuinely cannot be
+%   resumed -- the thread that was running it belonged to the previous
+%   process and is gone -- so it comes back `running:false` with
+%   `last_error` overwritten to say so, exactly like coplex_stdpy marks
+%   an interrupted task. `approval`/`on_event`/`web_search_backend`
+%   come back `none` (see harness_to_persistable_dict/2); `adapter` is
+%   re-derived from the persisted `adapter_kind` via wrap_adapter/3;
+%   `secrets`/`adapter_api_key` come back empty (never persisted in
+%   the first place); `fail_signatures`/`call_seq`/`subagents` come
+%   back at their harness_new/2 defaults. A fresh mutex is created --
+%   mutexes don't survive a process restart either.
+rehydrate_harnesses :-
+    coplex_state_dir(Dir),
+    (   exists_directory(Dir)
+    ->  directory_files(Dir, Entries),
+        include(is_state_json_file, Entries, Files),
+        length(Files, N),
+        debug(codex_harness, 'rehydrate_harnesses: ~w candidate file(s) in ~w', [N, Dir]),
+        forall(member(File, Files),
+               catch(rehydrate_one(Dir, File),
+                     Error,
+                     debug(codex_harness, 'rehydrate_harnesses: skipping ~w: ~q', [File, Error])))
+    ;   debug(codex_harness, 'rehydrate_harnesses: ~w does not exist yet, nothing to restore', [Dir])
+    ).
+
+is_state_json_file(Name) :-
+    sub_atom(Name, _, 5, 0, '.json').
+
+rehydrate_one(Dir, Name) :-
+    directory_file_path(Dir, Name, Path),
+    setup_call_cleanup(
+        open(Path, read, In, [encoding(utf8)]),
+        json_read_dict(In, Persisted, [value_string_as(atom)]),
+        close(In)),
+    Id = Persisted.id,
+    (   harness_rec(Id, _, _)
+    ->  true    % already live (e.g. rehydrate called twice) -- skip
+    ;   restore_harness_rec(Persisted)
+    ).
+
+restore_harness_rec(Persisted) :-
+    wrap_adapter(Persisted.adapter_kind, Persisted.id, Adapter),
+    (   Persisted.running == true
+    ->  Running = false,
+        LastError = _{type:harness_error,
+                       message:"Interrupted by a server restart while a run was in progress"}
+    ;   Running = Persisted.running,
+        LastError = Persisted.last_error
+    ),
+    State = Persisted.put(_{
+        adapter:Adapter,
+        running:Running, last_error:LastError, cancelled:false,
+        approval:none, on_event:none, web_search_backend:none,
+        secrets:[], adapter_api_key:"",
+        fail_signatures:[], call_seq:0, subagents:[]
+    }),
+    mutex_create(Mutex, [alias(Persisted.id)]),
+    assertz(harness_rec(Persisted.id, Mutex, State)),
+    debug(codex_harness, 'rehydrated ~w (running was ~w)', [Persisted.id, Persisted.running]).
+
 persist_msg(S, Msg) :-
     (   S.transcript == none
     ->  true

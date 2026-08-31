@@ -14,10 +14,10 @@ swipl -g run_tests -t halt test/test_codex_harness.pl
 swipl -g run_tests -t halt test/test_codex_harness_server.pl
 ```
 
-(42 tests / 22 tests respectively at the time of writing — see below
+(50 tests / 23 tests respectively at the time of writing — see below
 for what each one covers.)
 
-## `test/test_codex_harness.pl` — 42 tests, by category
+## `test/test_codex_harness.pl` — 50 tests, by category
 
 **Lifecycle & conversation state**
 - `new_close` — create/destroy doesn't leak or error.
@@ -139,7 +139,38 @@ for what each one covers.)
   is genuinely read-only, proving `subagent_allow_writes` actually
   gates write access rather than being decorative.
 
-## `test/test_codex_harness_server.pl` — 22 tests
+**Disk persistence (surviving a restart)**
+- `persist_writes_json_file` — a mutation (a completed run) leaves a
+  JSON file at `harness_state_file/2`'s path.
+- `persist_never_writes_secrets` — an `adapter_api_key` never appears
+  as a literal substring in the persisted file's raw text, even for a
+  harness that actually made a (stubbed) tool call.
+- `harness_close_deletes_persisted_file` — destroying a harness removes
+  its on-disk snapshot too, so it can't reappear on a later
+  `rehydrate_harnesses/0`.
+- `rehydrate_restores_messages_and_answer` — the core round trip:
+  forget the in-memory `harness_rec/3` fact (simulating a process
+  restart) without deleting the disk file, call
+  `rehydrate_harnesses/0`, and confirm `messages`/`last_answer`/
+  `running` all come back correctly.
+- `rehydrate_marks_interrupted_run` — a harness persisted with
+  `running: true` comes back `running: false` with a `last_error`
+  explaining it was interrupted by a restart, not silently resumed or
+  left in an impossible "still running" state.
+- `rehydrate_is_idempotent` — calling `rehydrate_harnesses/0` twice
+  doesn't create a duplicate `harness_rec/3` for the same id.
+- `rehydrated_harness_stays_functional` — a rehydrated harness can
+  still run tools afterward, proving `adapter_kind` correctly
+  round-trips through `wrap_adapter/3` rather than leaving a dead
+  placeholder adapter.
+- `rehydrate_preserves_sentinel_option_values` — the regression test
+  for the `value_string_as(atom)` fix (see `FEATURE_GUIDE.md`'s
+  pitfall list): `allowed_tools == all` and `transcript == none` must
+  still hold, and tools must still actually run, after a rehydration —
+  proving these sentinels came back as atoms, not same-text strings
+  that would silently fail every `==/2` check against them.
+
+## `test/test_codex_harness_server.pl` — 23 tests
 
 - `health` — `GET /coplex/health` liveness.
 - `admin_ui_serves_html` — `GET /coplex` replies HTML (not JSON),
@@ -224,6 +255,16 @@ for what each one covers.)
   call) — checked via observable behavior rather than trusting that
   harness creation alone proves the option took effect, since creation
   never echoes options back.
+- `harness_survives_a_simulated_server_restart` — the REST-level
+  companion to `test_codex_harness.pl`'s
+  `rehydrate_restores_messages_and_answer`, but exercised through a
+  genuine `server_stop` + `server_start/2` of the real HTTP server
+  (with the in-memory `harness_rec/3` fact also forgotten in between,
+  since stopping the listener alone doesn't reproduce a real process
+  restart wiping every in-memory fact): create a harness, run a task
+  to completion, stop the server, forget the fact, restart the server
+  (which calls `rehydrate_harnesses/0` internally), and confirm `GET
+  /coplex/harnesses/<id>` still returns the same `last_answer`.
 
 ## Testing philosophy notes worth preserving
 
@@ -234,6 +275,17 @@ for what each one covers.)
   localhost port per test run (`test_port/1`, currently `8797`, kept
   distinct from the production default `8840` in `plugin.py` so a real
   running server is never accidentally hijacked by the test suite).
+  Both suites also redirect disk persistence to an isolated temp
+  directory via a top-level `:- initialization/1` directive calling
+  `set_coplex_state_dir/1`, for the same reason — every `mutate/2` call
+  now writes a JSON snapshot (see `codex_harness.pl`'s
+  `persist_state/1`), and `server_start/2` now rehydrates from disk on
+  every call, so without that directive a test run would read *and
+  write* the real production `runtime/harnesses` directory. **Never
+  remove either directive** even if a refactor makes them look
+  unused — removing them reintroduces exactly this hazard silently
+  (the tests would very likely still pass, just against/into the wrong
+  directory).
 - **The REST suite talks real HTTP**, deliberately *not* reusing the
   server's own `with_json_body/3` helper for the client side — it
   hand-rolls minimal `http_get_json`/`http_post_json`/`http_delete_json`

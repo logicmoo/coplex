@@ -152,20 +152,62 @@ is now exposed over HTTP:
   string (a URL path segment) back -- an atom/string mismatch would
   make `harness_decide_approval/3` claim a perfectly valid, currently-
   pending `call_id` doesn't exist.
-  **Still not ported from `coplex_stdpy`'s console**: durable
-  disk-persisted tasks that survive a restart, and the separate
-  human-input-request mechanism (`coplex_stdpy`'s `provide_input`/
-  `POST /tasks/<id>/input`) -- `coplex` has no equivalent of a task
-  pausing to *ask the model's caller a question* mid-run, only tool-
-  call approval. `coplex_stdpy`'s `HarnessTaskManager` (see its
-  `runtime.py`) persists every task as JSON + a JSONL event log under a
-  state directory and rehydrates it on startup; `coplex`'s harnesses
-  (and their pending approvals) remain purely in-memory and vanish on
-  restart. Bringing that part of parity would mean persisting
-  `harness_rec/3` state (and an incrementally-appended event log) to
-  disk and rehydrating it on `workbench_startup/0` -- real new
-  engineering on the core agent loop, not a UI-only change -- treat it
-  as a separate, deliberately-scoped feature.
+  **Disk persistence — DONE**: every `mutate/2` call now rewrites this
+  harness's full state to `<coplex_state_dir>/<id>.json`
+  (`persist_state/1`, a full-snapshot rewrite via a `.tmp` file +
+  `rename_file/2`, not an incremental/JSONL append -- keeps
+  `rehydrate_harnesses/0` a single read per harness, no replay logic).
+  `coplex_state_dir/1` defaults to `./runtime/harnesses` (resolved
+  relative to the process's cwd -- `plugin.py` always launches swipl
+  with this plugin's own directory as cwd), overridable via
+  `COPLEX_STATE_DIR` or, for tests, `set_coplex_state_dir/1` (both test
+  files redirect this to an isolated temp directory via a top-level
+  `:- initialization/1` directive -- **never remove that** or the
+  suite starts reading/writing the real production runtime directory).
+  `server_start/2` calls the new `rehydrate_harnesses/0` once, before
+  the HTTP listener comes up, restoring every `<id>.json` it finds
+  (each under its own `catch/3` -- one corrupt file must not block
+  every other harness from coming back) as a fresh `harness_rec/3`
+  fact with a fresh mutex. `harness_close/1` deletes the file (a
+  destroyed harness shouldn't reappear next rehydrate).
+  What's excluded from the persisted JSON and always reset to a safe
+  default on rehydration (see `harness_to_persistable_dict/2` /
+  `restore_harness_rec/1`): `adapter_api_key`/`secrets` (never let a
+  plaintext secret reach disk, matching every other "never leaked"
+  invariant already in this codebase), `approval`/`on_event`/
+  `web_search_backend` (goal-shaped, in-process only, meaningless
+  after a real restart -- reset to `none`), `adapter` itself (a
+  *wrapped* closure like `scripted_adapter(Id)` -- the new
+  `adapter_kind` field carries the pre-`wrap_adapter/3` selector so it
+  can be re-derived, but only for the three built-in selectors;
+  anything else -- a custom in-process adapter goal -- persists as a
+  safe `scripted` fallback), `fail_signatures`/`call_seq`/`subagents`
+  (pure in-run bookkeeping, reset to their `harness_new/2` defaults). A
+  harness whose persisted `running` was `true` comes back
+  `running:false` with `last_error` overwritten to say it was
+  interrupted by a restart -- its execution thread is gone, only its
+  history is recoverable. **The one real bug this surfaced**: SWI's
+  `json_read_dict/3` decodes JSON string values as Prolog *strings* by
+  default, but this codebase represents sentinel/enum values (`none`,
+  `all`, `auto`, tool names) as *atoms* everywhere -- `S.allowed_tools
+  == all`-style `==/2` checks scattered through `codex_harness.pl`
+  would silently break after a naive rehydration (a string `"all"`
+  never unifies with the atom `all`, denying every tool). Fixed by
+  reading persisted files with `json_read_dict(In, Dict,
+  [value_string_as(atom)])` instead of the default -- this correctly
+  round-trips every sentinel *and* every free-text field (message
+  content, `current_task`, ...) as an atom too, which is harmless
+  since every text-handling predicate this codebase actually uses
+  (`sub_atom/5`, `sub_string/5`, `format/2`, JSON serialization, ...)
+  accepts atoms and strings interchangeably as input.
+  **Still not ported from `coplex_stdpy`'s console**: a paused
+  `approval_mode(interactive)` call does not survive a restart (there
+  is nothing that could safely resume waiting for a REST decision
+  across a real process boundary -- it's simply gone, same as before
+  persistence existed), and the separate human-input-request mechanism
+  (`coplex_stdpy`'s `provide_input`/`POST /tasks/<id>/input`) --
+  `coplex` has no equivalent of a task pausing to *ask the model's
+  caller a question* mid-run, only tool-call approval.
 - A remaining idea, not yet done: a CLI/REPL loop calling
   `harness_run/3` directly in-process for local scripting (as opposed
   to the REST API) — still worth adding if useful, but the REST layer
@@ -315,6 +357,21 @@ hunks only. If git binary patches or rename headers are needed:
   a REST-supplied `call_id` for the *same* logical call -- normalize to
   a string at the point of generation (`atom_string/2`) rather than
   trying to make every consumer type-tolerant.
+- **`json_read_dict/3` decodes JSON string values as Prolog strings by
+  default, not atoms** -- a problem the moment you read back something
+  this codebase originally wrote as a sentinel/enum *atom*
+  (`none`/`all`/`auto`, a tool name, ...), since almost every check
+  against one is a plain `==/2` (`S.allowed_tools == all`,
+  `S.transcript == none`, `dispatch_tool/5`'s clause heads, ...) that
+  silently never matches a same-text *string*. Surfaced by
+  `rehydrate_harnesses/0` reading `persist_state/1`'s JSON snapshots
+  back. Fixed with `json_read_dict(In, Dict, [value_string_as(atom)])`
+  instead of the default options -- this decodes *every* string value
+  (including genuine free text) as an atom, which is harmless here
+  since every text predicate this codebase actually calls on those
+  values (`sub_atom/5`, `sub_string/5`, `format/2`, JSON
+  re-serialization, ...) accepts atoms and strings interchangeably as
+  input.
 
 ## Suggested order of work
 
