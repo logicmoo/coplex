@@ -79,7 +79,7 @@ base_url(Base) :-
 
 test(health, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
-    atomic_list_concat([Base, '/health'], Url),
+    atomic_list_concat([Base, '/coplex/health'], Url),
     http_get_json(Url, _{}, Reply),
     assertion(Reply.ok == true).
 
@@ -128,7 +128,7 @@ test(endpoints_moved_to_coplex_endpoints, [setup(setup_server), cleanup(teardown
 
 test(tools_nonempty, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
-    atomic_list_concat([Base, '/tools'], Url),
+    atomic_list_concat([Base, '/coplex/tools'], Url),
     http_get_json(Url, _{}, Reply),
     assertion(Reply.ok == true),
     assertion(is_list(Reply.tools)),
@@ -139,7 +139,7 @@ test(tools_advertise_real_endpoint, [setup(setup_server), cleanup(teardown_serve
     % actually resolves to a route (see tool_endpoint_is_callable),
     % not just a name a UI would have to guess a URL for.
     base_url(Base),
-    atomic_list_concat([Base, '/tools'], Url),
+    atomic_list_concat([Base, '/coplex/tools'], Url),
     http_get_json(Url, _{}, Reply),
     spec_for_name(Reply.tools, "read_file", ReadFileSpec),
     assertion(ReadFileSpec.method == "POST"),
@@ -149,28 +149,31 @@ spec_for_name([D|_], Name, D) :- D.name == Name, !.
 spec_for_name([_|Ds], Name, Spec) :- spec_for_name(Ds, Name, Spec).
 
 test(tool_endpoint_is_callable, [setup(setup_server), cleanup(teardown_server)]) :-
-    % POST /tools/<name> must work with no harness id at all -- this
-    % is the endpoint GET /tools advertises for each entry.
-    base_url(Base),
-    atomic_list_concat([Base, '/tools/git_status'], Url),
-    http_post_json(Url, _{}, Reply),
-    assertion(Reply.ok == true),
-    assertion(Reply.tool == "git_status").
-
-test(direct_tool_endpoint_coplex_prefix, [setup(setup_server), cleanup(teardown_server)]) :-
-    % Same handler, reached through the /coplex-prefixed parity route.
+    % POST /coplex/tools/<name> must work with no harness id at all --
+    % this is the endpoint GET /coplex/tools advertises for each entry
+    % (the canonical, documented form; direct_tool_endpoint_bare_root_parity
+    % below covers the bare-root fallback used by the workbench proxy).
     base_url(Base),
     atomic_list_concat([Base, '/coplex/tools/git_status'], Url),
     http_post_json(Url, _{}, Reply),
     assertion(Reply.ok == true),
     assertion(Reply.tool == "git_status").
 
+test(direct_tool_endpoint_bare_root_parity, [setup(setup_server), cleanup(teardown_server)]) :-
+    % Same handler, reached through the bare-root parity route kept
+    % for the workbench's stripped-prefix proxy mount.
+    base_url(Base),
+    atomic_list_concat([Base, '/tools/git_status'], Url),
+    http_post_json(Url, _{}, Reply),
+    assertion(Reply.ok == true),
+    assertion(Reply.tool == "git_status").
+
 test(direct_tool_endpoint_unknown_tool_is_200, [setup(setup_server), cleanup(teardown_server)]) :-
     % An unknown tool name is a normal JSON error reply, matching the
-    % existing per-harness POST /harnesses/<id>/tools/<name> behavior
-    % -- not a 404, since the route itself did match.
+    % existing per-harness POST /coplex/harnesses/<id>/tools/<name>
+    % behavior -- not a 404, since the route itself did match.
     base_url(Base),
-    atomic_list_concat([Base, '/tools/does_not_exist'], Url),
+    atomic_list_concat([Base, '/coplex/tools/does_not_exist'], Url),
     http_post_json(Url, _{}, Reply),
     assertion(Reply.ok == false),
     assertion(Reply.error.type == "unknown_tool").
@@ -179,8 +182,8 @@ test(direct_tool_endpoint_reuses_shared_harness, [setup(setup_server), cleanup(t
     % Two direct calls share one lazily-created harness rather than
     % leaking a fresh one per request.
     base_url(Base),
-    atomic_list_concat([Base, '/tools/git_status'], Url),
-    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    atomic_list_concat([Base, '/coplex/tools/git_status'], Url),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_get_json(HarnessesUrl, _{}, Before),
     length(Before.ids, NBefore),
     http_post_json(Url, _{}, _),
@@ -191,23 +194,23 @@ test(direct_tool_endpoint_reuses_shared_harness, [setup(setup_server), cleanup(t
 
 test(create_run_snapshot_delete, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
-    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_post_json(HarnessesUrl,
                    _{root:".", adapter:"scripted",
                      mock_replies:[_{content:"hi from test", tool_calls:[]}]},
                    Created),
     assertion(Created.ok == true),
     Id = Created.id,
-    format(atom(RunUrl), '~w/harnesses/~w/run', [Base, Id]),
+    format(atom(RunUrl), '~w/coplex/harnesses/~w/run', [Base, Id]),
     http_post_json(RunUrl, _{task:"say hi"}, RunReply),
     assertion(RunReply.ok == true),
     assertion(RunReply.answer == "hi from test"),
-    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
     http_get_json(ItemUrl, _{}, Snap),
     assertion(Snap.ok == true),
     assertion(Snap.iteration >= 0),
     assertion(Snap.created_at > 0),
-    format(atom(MsgUrl), '~w/harnesses/~w/messages', [Base, Id]),
+    format(atom(MsgUrl), '~w/coplex/harnesses/~w/messages', [Base, Id]),
     http_get_json(MsgUrl, _{}, MsgReply),
     assertion(is_list(MsgReply.messages)),
     http_delete_json(ItemUrl, DelReply),
@@ -216,12 +219,12 @@ test(create_run_snapshot_delete, [setup(setup_server), cleanup(teardown_server)]
     assertion(\+ memberchk(Id, ListReply.ids)).
 
 test(harnesses_list_has_summaries, [setup(setup_server), cleanup(teardown_server)]) :-
-    % GET /harnesses must return a lightweight per-harness summary
-    % (running/current_task/message_count/...) alongside the plain id
-    % list, so a UI can render a dashboard table without an extra
-    % request per row.
+    % GET /coplex/harnesses must return a lightweight per-harness
+    % summary (running/current_task/message_count/...) alongside the
+    % plain id list, so a UI can render a dashboard table without an
+    % extra request per row.
     base_url(Base),
-    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_post_json(HarnessesUrl, _{root:".", adapter:"scripted"}, Created),
     Id = Created.id,
     http_get_json(HarnessesUrl, _{}, ListReply),
@@ -229,7 +232,7 @@ test(harnesses_list_has_summaries, [setup(setup_server), cleanup(teardown_server
     summary_for_id(ListReply.harnesses, Id, Summary),
     assertion(Summary.running == false),
     assertion(Summary.message_count == 0),
-    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
     http_delete_json(ItemUrl, _).
 
 summary_for_id([D|_], Id, D) :- D.id == Id, !.
@@ -237,17 +240,17 @@ summary_for_id([_|Ds], Id, Summary) :- summary_for_id(Ds, Id, Summary).
 
 test(async_run_completes_in_background, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
-    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_post_json(HarnessesUrl,
                    _{root:".", adapter:"scripted",
                      mock_replies:[_{content:"async hi", tool_calls:[]}]},
                    Created),
     Id = Created.id,
-    format(atom(RunUrl), '~w/harnesses/~w/run', [Base, Id]),
+    format(atom(RunUrl), '~w/coplex/harnesses/~w/run', [Base, Id]),
     http_post_json(RunUrl, _{task:"say hi", async:true}, RunReply),
     assertion(RunReply.ok == true),
     assertion(RunReply.started == true),
-    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
     wait_run_finished(ItemUrl, 100, Snap),
     assertion(Snap.last_answer == "async hi"),
     http_delete_json(ItemUrl, _).
@@ -264,7 +267,7 @@ wait_run_finished(Url, N, Snap) :-
 
 test(unknown_harness_is_404, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
-    format(atom(Url), '~w/harnesses/does-not-exist', [Base]),
+    format(atom(Url), '~w/coplex/harnesses/does-not-exist', [Base]),
     catch(
         ( http_open(Url, In, [status_code(Code)]),
           close(In)
@@ -275,13 +278,13 @@ test(unknown_harness_is_404, [setup(setup_server), cleanup(teardown_server)]) :-
 
 test(tool_dispatch_over_rest, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
-    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_post_json(HarnessesUrl, _{root:"."}, Created),
     Id = Created.id,
-    format(atom(ToolUrl), '~w/harnesses/~w/tools/git_status', [Base, Id]),
+    format(atom(ToolUrl), '~w/coplex/harnesses/~w/tools/git_status', [Base, Id]),
     http_post_json(ToolUrl, _{}, Reply),
     assertion(Reply.tool == "git_status"),
-    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
     http_delete_json(ItemUrl, _).
 
 test(goal_shaped_options_are_ignored, [setup(setup_server), cleanup(teardown_server)]) :-
@@ -290,14 +293,14 @@ test(goal_shaped_options_are_ignored, [setup(setup_server), cleanup(teardown_ser
     % (extra keys are just dropped) rather than erroring out or, worse,
     % being turned into a callable goal.
     base_url(Base),
-    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_post_json(HarnessesUrl,
                    _{root:".", approval:"shell(rm)", on_event:"shell(rm)",
                      web_search_backend:"shell(rm)"},
                    Created),
     assertion(Created.ok == true),
     Id = Created.id,
-    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
     http_get_json(ItemUrl, _{}, Snap),
     assertion(Snap.ok == true),
     http_delete_json(ItemUrl, _).
@@ -309,7 +312,7 @@ test(openai_adapter_selectable_and_key_not_leaked, [setup(setup_server), cleanup
     % the "no secret ever reflected back" contract already covered by
     % goal_shaped_options_are_ignored for approval/on_event/etc.
     base_url(Base),
-    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     http_post_json(HarnessesUrl,
                    _{root:".", adapter:"openai",
                      adapter_url:"http://localhost:1/v1/chat/completions",
@@ -317,7 +320,7 @@ test(openai_adapter_selectable_and_key_not_leaked, [setup(setup_server), cleanup
                    Created),
     assertion(Created.ok == true),
     Id = Created.id,
-    format(atom(ItemUrl), '~w/harnesses/~w', [Base, Id]),
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
     http_get_json(ItemUrl, _{}, Snap),
     assertion(Snap.ok == true),
     term_string(Snap, SnapText),
@@ -333,8 +336,11 @@ test(cors_preflight_and_headers, [setup(setup_server), cleanup(teardown_server)]
     % before its real POST/DELETE; the server must answer 200 with
     % Access-Control-Allow-Origin, and normal replies must carry the
     % same header so the browser doesn't block reading the response.
+    % Checked on the canonical /coplex-prefixed route (POST/DELETE)
+    % and, for the GET side, the bare-root parity route -- covering
+    % CORS on both route families in one test.
     base_url(Base),
-    atomic_list_concat([Base, '/harnesses'], HarnessesUrl),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
     setup_call_cleanup(
         http_open(HarnessesUrl, In,
                    [ method(options),

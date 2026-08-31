@@ -51,8 +51,8 @@ functor:
     configuration, gated by the same `allow_network` flag the web
     tools already require), never to anything derived from a
     request's `call/N`-shaped fields.
-  * Tool names arriving on the URL (`POST /harnesses/<Id>/tools/<Name>`
-    or the harness-less `POST /tools/<Name>`) are only ever unified
+  * Tool names arriving on the URL (`POST /coplex/harnesses/<Id>/tools/<Name>`
+    or the harness-less `POST /coplex/tools/<Name>`) are only ever unified
     against codex_harness's fixed `dispatch_tool/5` clause table, so an
     unknown/attacker-chosen name can never resolve to an arbitrary
     predicate.
@@ -72,27 +72,37 @@ functor:
 
 Every mutating action a UI needs is a plain REST call, and every piece
 of state it needs to render is a plain REST read -- nothing requires
-an open connection or a Prolog client:
+an open connection or a Prolog client. Every path below is shown
+`/coplex`-prefixed (the canonical, documented form -- see
+rest_endpoints/1); each also answers unprefixed at the bare root
+purely so the workbench's stripped-prefix proxy mount can reach it
+(see path_segments_after/3 and the http_handler/3 directives below):
 
-  * `POST /harnesses/<id>/run` blocks until the agent loop finishes by
-    default. Pass `{"async": true}` in the body instead to get an
-    immediate `{ok:true, started:true}` reply while the run continues
-    in a background thread; poll `GET /harnesses/<id>` (or the lighter
-    `GET /harnesses` list) for `running`/`last_answer`/`last_error` to
-    know when it's done. A second `run` while one is already in flight
-    is rejected with HTTP 409 rather than corrupting shared state.
-  * `GET /harnesses` returns both `ids` (unchanged, for existing
-    callers) and `harnesses`, a list of lightweight per-harness status
-    dicts (`running`, `current_task`, `iteration`, `last_answer`,
-    `last_error`, `message_count`, `tool_call_count`, `created_at`) --
-    enough to render a dashboard table without an extra request per
-    row.
-  * `GET /harnesses/<id>` returns the full snapshot (same fields plus
-    the complete `messages`/`tool_activity` history) for a detail view.
-  * `GET /tools` advertises a real, working `method` + `endpoint` for
-    every tool (`POST /coplex/tools/<name>`) backed by a shared,
+  * `POST /coplex/harnesses/<id>/run` blocks until the agent loop
+    finishes by default. Pass `{"async": true}` in the body instead to
+    get an immediate `{ok:true, started:true}` reply while the run
+    continues in a background thread; poll `GET
+    /coplex/harnesses/<id>` (or the lighter `GET /coplex/harnesses`
+    list) for `running`/`last_answer`/`last_error` to know when it's
+    done. A second `run` while one is already in flight is rejected
+    with HTTP 409 rather than corrupting shared state.
+  * `GET /coplex/harnesses` returns both `ids` (unchanged, for
+    existing callers) and `harnesses`, a list of lightweight
+    per-harness status dicts (`running`, `current_task`, `iteration`,
+    `last_answer`, `last_error`, `message_count`, `tool_call_count`,
+    `created_at`) -- enough to render a dashboard table without an
+    extra request per row.
+  * `GET /coplex/harnesses/<id>` returns the full snapshot (same
+    fields plus the complete `messages`/`tool_activity` history) for a
+    detail view.
+  * `GET /coplex/tools` advertises a real, working `method` + `endpoint`
+    for every tool (`POST /coplex/tools/<name>`) backed by a shared,
     lazily-created harness, for callers that just want to run one tool
     without first managing a harness's lifecycle.
+  * `GET /coplex` itself now serves the browser-facing admin UI (see
+    admin_ui_handler/1) -- a thin client over exactly the endpoints
+    above. The JSON status/endpoint-list document that used to live
+    here moved to `GET /coplex/endpoints` (coplex_endpoints_handler/1).
 
 @see prolog/coplex/codex_harness.pl, README.md, FEATURE_GUIDE.md
 */
@@ -139,13 +149,16 @@ cors_origin_list(Raw, Origins) :-
 :- meta_predicate with_existing_harness(+, 0).
 :- meta_predicate with_json_body(+, -, 0).
 
-%   Every route answers at the root and, in parity, under the /coplex
-%   prefix (the pack's slug), so both the workbench's stripped-prefix
-%   proxy mount and direct prefixed callers reach the same handlers.
-%   `/coplex` (and bare `/`) now serve the admin UI (see
-%   admin_ui_handler/1); the JSON status/endpoint-list document that
-%   used to live at `/coplex` moved to `/coplex/endpoints` (and bare
-%   `/endpoints`) -- see coplex_endpoints_handler/1.
+%   The `/coplex`-prefixed form of every route below is the canonical,
+%   documented one (see rest_endpoints/1, README.md, docs/04-rest-
+%   api.md) -- but each also answers unprefixed at the bare root, in
+%   parity, purely so the workbench's stripped-prefix proxy mount
+%   (which forwards e.g. `<workbench>/coplex/tools` to this server's
+%   bare `/tools`) can still reach it. `/coplex` (and bare `/`) serve
+%   the admin UI (see admin_ui_handler/1); the JSON status/endpoint-
+%   list document that used to live at `/coplex` moved to
+%   `/coplex/endpoints` (and bare `/endpoints`) -- see
+%   coplex_endpoints_handler/1.
 :- http_handler('/', admin_ui_handler, [methods([get,options])]).
 :- http_handler('/endpoints', coplex_endpoints_handler, [methods([get,options])]).
 :- http_handler('/health', health_handler, [methods([get,options])]).
@@ -635,19 +648,19 @@ swipl_version_string(Version) :-
 rest_endpoints([
     "GET    /coplex (admin UI, HTML)",
     "GET    /coplex/endpoints",
-    "GET    /health",
-    "GET    /tools",
-    "POST   /tools/<name>",
-    "GET    /harnesses",
-    "POST   /harnesses",
-    "GET    /harnesses/<id>",
-    "DELETE /harnesses/<id>",
-    "POST   /harnesses/<id>/run",
-    "POST   /harnesses/<id>/cancel",
-    "POST   /harnesses/<id>/reset",
-    "GET    /harnesses/<id>/messages",
-    "POST   /harnesses/<id>/tools/<name>",
-    "POST   /shutdown"
+    "GET    /coplex/health",
+    "GET    /coplex/tools",
+    "POST   /coplex/tools/<name>",
+    "GET    /coplex/harnesses",
+    "POST   /coplex/harnesses",
+    "GET    /coplex/harnesses/<id>",
+    "DELETE /coplex/harnesses/<id>",
+    "POST   /coplex/harnesses/<id>/run",
+    "POST   /coplex/harnesses/<id>/cancel",
+    "POST   /coplex/harnesses/<id>/reset",
+    "GET    /coplex/harnesses/<id>/messages",
+    "POST   /coplex/harnesses/<id>/tools/<name>",
+    "POST   /coplex/shutdown"
 ]).
 
 shutdown_handler(Request) :-
@@ -688,12 +701,12 @@ spec_dict(spec(Name, Risk, Desc, Schema), Dict) :-
 
 %!  direct_tool_item(+Request) is det.
 %
-%   POST /tools/<name> (and its /coplex-prefixed parity route) --
+%   POST /coplex/tools/<name> (and its bare-root parity route) --
 %   runs one named tool immediately, with no caller-managed harness
 %   id at all. Backed by a single lazily-created, shared harness (see
 %   ensure_default_harness/1) built from harness_new/2's plain
-%   defaults, i.e. exactly what `POST /harnesses` with an empty body
-%   would create: root ".", allow_shell/allow_network both false,
+%   defaults, i.e. exactly what `POST /coplex/harnesses` with an empty
+%   body would create: root ".", allow_shell/allow_network both false,
 %   allowed_tools all, approval none (so nothing blocks waiting on an
 %   external approval callback -- see codex_harness.pl's approve/4).
 %   An unknown tool name isn't a routing 404; like the per-harness
@@ -727,8 +740,8 @@ dispatch_direct_tool(_Segments, _Method, _Request) :-
 %   Guarded by a mutex so two first-use requests racing each other
 %   can't each create (and leak) their own default harness. Self-
 %   healing: if the default harness is ever deleted via
-%   `DELETE /harnesses/<id>`, the next direct call just creates a
-%   fresh one.
+%   `DELETE /coplex/harnesses/<id>`, the next direct call just creates
+%   a fresh one.
 :- dynamic default_harness_id/1.
 
 ensure_default_harness(Id) :-

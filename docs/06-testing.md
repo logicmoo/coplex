@@ -110,7 +110,7 @@ for what each one covers.)
 
 ## `test/test_codex_harness_server.pl` — 18 tests
 
-- `health` — `GET /health` liveness.
+- `health` — `GET /coplex/health` liveness.
 - `admin_ui_serves_html` — `GET /coplex` replies HTML (not JSON),
   `Content-Type: text/html`, containing the dashboard's markup.
 - `admin_ui_bare_root_parity` — bare `GET /` serves byte-identical
@@ -121,37 +121,40 @@ for what each one covers.)
   /coplex/endpoints` (and bare `/endpoints`), and `GET /coplex` itself
   no longer parses as JSON at all — proving the move actually
   happened, not just additively.
-- `tools_nonempty` — `GET /tools` mirrors the core catalog over HTTP.
-- `tools_advertise_real_endpoint` — every `GET /tools` entry carries a
-  real `method`/`endpoint` (e.g. `read_file` → `POST
+- `tools_nonempty` — `GET /coplex/tools` mirrors the core catalog over HTTP.
+- `tools_advertise_real_endpoint` — every `GET /coplex/tools` entry
+  carries a real `method`/`endpoint` (e.g. `read_file` → `POST
   /coplex/tools/read_file`) instead of leaving a caller to guess a URL.
-- `tool_endpoint_is_callable` — `POST /tools/<name>` (the endpoint
-  `GET /tools` advertises) actually works with no harness id at all.
-- `direct_tool_endpoint_coplex_prefix` — same route, reached through
-  the `/coplex`-prefixed parity mount.
+- `tool_endpoint_is_callable` — `POST /coplex/tools/<name>` (the
+  endpoint `GET /coplex/tools` advertises) actually works with no
+  harness id at all, using the canonical `/coplex`-prefixed path.
+- `direct_tool_endpoint_bare_root_parity` — same route, reached
+  through the bare-root parity mount kept for the workbench's
+  stripped-prefix proxy.
 - `direct_tool_endpoint_unknown_tool_is_200` — an unknown name on
-  `POST /tools/<name>` is an ordinary `200` with an `unknown_tool`
-  error body, matching `POST /harnesses/<id>/tools/<name>`'s
-  behavior, not a routing 404.
+  `POST /coplex/tools/<name>` is an ordinary `200` with an
+  `unknown_tool` error body, matching
+  `POST /coplex/harnesses/<id>/tools/<name>`'s behavior, not a routing
+  404.
 - `direct_tool_endpoint_reuses_shared_harness` — repeated direct calls
   share one lazily-created harness (`ensure_default_harness/1`)
   instead of leaking a fresh one per request.
 - `create_run_snapshot_delete` — the core CRUD lifecycle over REST:
   create → synchronous run → snapshot (including `created_at`) →
   messages → delete → confirm it's gone from the list.
-- `harnesses_list_has_summaries` — `GET /harnesses` includes the
-  `harnesses` summary array (not just `ids`), with correct
+- `harnesses_list_has_summaries` — `GET /coplex/harnesses` includes
+  the `harnesses` summary array (not just `ids`), with correct
   `running`/`message_count` values for a freshly-created harness —
   protects the list-view UI contract described in
   [04-rest-api.md](04-rest-api.md).
 - `async_run_completes_in_background` — `{"async": true}` returns
-  `started:true` immediately, and polling `GET /harnesses/<id>`
-  eventually observes `running == false` with the expected
-  `last_answer` — protects the non-blocking run contract end-to-end
-  (not just at the Prolog predicate level).
+  `started:true` immediately, and polling `GET
+  /coplex/harnesses/<id>` eventually observes `running == false` with
+  the expected `last_answer` — protects the non-blocking run contract
+  end-to-end (not just at the Prolog predicate level).
 - `unknown_harness_is_404` — a nonexistent id returns HTTP 404, not a
   500 or a hang.
-- `tool_dispatch_over_rest` — `POST /harnesses/<id>/tools/<name>`
+- `tool_dispatch_over_rest` — `POST /coplex/harnesses/<id>/tools/<name>`
   correctly reaches `harness_tool/4` and returns its result shape.
 - `goal_shaped_options_are_ignored` — **security regression test**:
   posting `{"approval": "shell(rm)", "on_event": "shell(rm)",
@@ -163,16 +166,16 @@ for what each one covers.)
 - `openai_adapter_selectable_and_key_not_leaked` — **security
   regression test**: `adapter:"openai"` plus `adapter_url`/
   `adapter_api_key` must be accepted at creation, but the API key must
-  never come back out through `GET /harnesses/<id>` or `GET
-  /harnesses`'s summary list — the same "never reflected back"
+  never come back out through `GET /coplex/harnesses/<id>` or `GET
+  /coplex/harnesses`'s summary list — the same "never reflected back"
   contract `goal_shaped_options_are_ignored` protects for
   `approval`/`on_event`/etc., applied to the one REST-reachable option
   that is a real secret.
 - `cors_preflight_and_headers` — an `OPTIONS` preflight against
-  `/harnesses` returns 200 with `Access-Control-Allow-Origin: *`, and
-  a normal `GET /health` reply carries the same header — protects the
-  browser-UI CORS contract described in
-  [04-rest-api.md](04-rest-api.md).
+  `/coplex/harnesses` returns 200 with `Access-Control-Allow-Origin: *`,
+  and a normal `GET /health` (bare-root parity route) reply carries the
+  same header — protects the browser-UI CORS contract described in
+  [04-rest-api.md](04-rest-api.md) for both route families.
 
 ## Testing philosophy notes worth preserving
 

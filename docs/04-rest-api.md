@@ -58,12 +58,12 @@ dashboard — markup, CSS, and JS all inlined in one string
 dependency. It exists purely as a thin client over the JSON endpoints
 in the table above:
 
-- **Tools** — lists `GET /tools`'s catalog (name, risk, method +
-  endpoint, description).
-- **Harnesses** — a create form (`POST /harnesses`) plus a live table
-  (polls `GET /harnesses` every 3s) with per-row actions: Run (opens a
-  task prompt, then `POST .../run` with `{"async": true}`), Cancel,
-  Reset, Msgs (`GET .../messages` in a modal), Delete.
+- **Tools** — lists `GET /coplex/tools`'s catalog (name, risk, method
+  + endpoint, description).
+- **Harnesses** — a create form (`POST /coplex/harnesses`) plus a live
+  table (polls `GET /coplex/harnesses` every 3s) with per-row actions:
+  Run (opens a task prompt, then `POST .../run` with `{"async": true}`),
+  Cancel, Reset, Msgs (`GET .../messages` in a modal), Delete.
 
 All of its `fetch()` calls use absolute `/coplex/...` paths, so the
 same page works identically whether a browser loaded it directly from
@@ -80,14 +80,14 @@ by `coplex_endpoints_handler/1` (the renamed former
 path, so a script or monitoring tool that used to poll `/coplex`
 directly needs to point at `/coplex/endpoints` now.
 
-### Direct tool calls (`GET /tools` endpoint field)
+### Direct tool calls (`GET /coplex/tools` endpoint field)
 
-Before, `GET /tools` returned only `name`/`risk`/`description`/`schema`
-for each tool, so a UI wanting to invoke one had to invent a URL —
-which typically produced something that matched no route at all (e.g.
-a bare `http://host:port/read_file`, with no `/coplex` prefix and no
-`/tools/` segment). Every entry now also carries the endpoint that
-actually works:
+Before, `GET /coplex/tools` returned only
+`name`/`risk`/`description`/`schema` for each tool, so a UI wanting to
+invoke one had to invent a URL — which typically produced something
+that matched no route at all (e.g. a bare `http://host:port/read_file`,
+with no `/coplex` prefix and no `/tools/` segment). Every entry now
+also carries the endpoint that actually works:
 
 ```json
 {"name": "read_file", "risk": "read_only", "schema": {"path": "string"},
@@ -95,20 +95,21 @@ actually works:
  "method": "POST", "endpoint": "/coplex/tools/read_file"}
 ```
 
-`POST /tools/<name>` (`direct_tool_item/1`, mirrored at
-`/coplex/tools/<name>`) runs `harness_tool/4` against a single
-harness shared across all direct calls, created lazily on first use
-(`ensure_default_harness/1`) with plain `harness_new/2` defaults — the
-same as `POST /harnesses` with an empty body: `root: "."`,
-`allow_shell`/`allow_network` both `false`, `allowed_tools: all`,
-`approval: none` (so nothing blocks waiting on an external approval
-callback). Creation is mutex-guarded so concurrent first calls can't
-each create their own harness, and it's self-healing: deleting that
-harness via `DELETE /harnesses/<id>` just causes the next direct call
-to create a fresh one. An unknown tool name is **not** a routing
-404 — like `POST /harnesses/<id>/tools/<name>`, it comes back as an
-ordinary `200` with `{"ok": false, "error": {"type": "unknown_tool",
-...}}`.
+`POST /coplex/tools/<name>` (`direct_tool_item/1`, also reachable
+unprefixed at bare `/tools/<name>` for the workbench's proxy) runs
+`harness_tool/4` against a single harness shared across all direct
+calls, created lazily on first use (`ensure_default_harness/1`) with
+plain `harness_new/2` defaults — the same as `POST /coplex/harnesses`
+with an empty body: `root: "."`, `allow_shell`/`allow_network` both
+`false`, `allowed_tools: all`, `approval: none` (so nothing blocks
+waiting on an external approval callback). Creation is mutex-guarded
+so concurrent first calls can't each create their own harness, and
+it's self-healing: deleting that harness via `DELETE
+/coplex/harnesses/<id>` just causes the next direct call to create a
+fresh one. An unknown tool name is **not** a routing
+404 — like `POST /coplex/harnesses/<id>/tools/<name>`, it comes back
+as an ordinary `200` with `{"ok": false, "error": {"type":
+"unknown_tool", ...}}`.
 
 ## Designing a UI around this API
 
@@ -119,12 +120,13 @@ API.
 
 ### Non-blocking runs
 
-`POST /harnesses/<id>/run` blocks the HTTP connection until the agent
-loop finishes by default — fine for a script, a bad fit for a browser
-UI that wants to show live progress. Pass `{"async": true}` instead:
+`POST /coplex/harnesses/<id>/run` blocks the HTTP connection until the
+agent loop finishes by default — fine for a script, a bad fit for a
+browser UI that wants to show live progress. Pass `{"async": true}`
+instead:
 
 ```http
-POST /harnesses/<id>/run
+POST /coplex/harnesses/<id>/run
 Content-Type: application/json
 
 {"task": "Add a health check endpoint", "async": true}
@@ -147,16 +149,16 @@ sequenceDiagram
     participant REST as coplex_server.pl
     participant Core as codex_harness.pl bg thread
 
-    UI->>REST: POST /harnesses/:id/run async=true
+    UI->>REST: POST /coplex/harnesses/:id/run async=true
     REST->>Core: harness_run_async/3\n(marks running=true synchronously)
     REST-->>UI: 200 ok=true started=true
     Note over Core: agent loop runs\n(model calls, tools, ...)
     loop until running == false
-        UI->>REST: GET /harnesses/:id
+        UI->>REST: GET /coplex/harnesses/:id
         REST-->>UI: running=true iteration=N
     end
     Core-->>REST: mutate(finish_run)\nrunning=false, last_answer set
-    UI->>REST: GET /harnesses/:id
+    UI->>REST: GET /coplex/harnesses/:id
     REST-->>UI: running=false last_answer set
 ```
 
@@ -168,9 +170,9 @@ corrupting anything.
 
 ### Dashboard-friendly listing
 
-`GET /harnesses` returns both the original plain `ids` array (for
-backward compatibility) and a `harnesses` array of `harness_summary/2`
-dicts:
+`GET /coplex/harnesses` returns both the original plain `ids` array
+(for backward compatibility) and a `harnesses` array of
+`harness_summary/2` dicts:
 
 ```json
 {
@@ -188,10 +190,11 @@ dicts:
 }
 ```
 
-This is deliberately *not* the same shape as `GET /harnesses/<id>`
-(`harness_snapshot/2`), which additionally includes the complete
-`messages` and `tool_activity` arrays — a list view for N harnesses
-should cost O(1) requests and a small, bounded payload per row; a
+This is deliberately *not* the same shape as `GET
+/coplex/harnesses/<id>` (`harness_snapshot/2`), which additionally
+includes the complete `messages` and `tool_activity` arrays — a list
+view for N harnesses should cost O(1) requests and a small, bounded
+payload per row; a
 detail view for one harness can afford to be complete.
 
 ### CORS
@@ -227,9 +230,10 @@ The one invariant that matters most here: **a request body is never
 parsed as Prolog source, and never used to construct a callable
 term.**
 
-- **`POST /harnesses` option filtering.** `dict_options/2` maps the
-  incoming JSON dict through `safe_pair_option/2`, which only keeps
-  keys present in the fixed `safe_option_key/1` fact table (`root`,
+- **`POST /coplex/harnesses` option filtering.** `dict_options/2` maps
+  the incoming JSON dict through `safe_pair_option/2`, which only
+  keeps keys present in the fixed `safe_option_key/1` fact table
+  (`root`,
   `cwd`, `model`, `instructions`, `allow_shell`, `allow_network`,
   `allowed_hosts`, `writable_paths`, `readable_paths`,
   `max_output_bytes`, `max_download_bytes`, `timeout`,
@@ -269,12 +273,12 @@ term.**
   `test/test_codex_harness_server.pl`) that posts
   `{"approval": "shell(rm)", ...}` and asserts creation still succeeds
   with the value simply dropped.
-- **Tool names on `POST /harnesses/<id>/tools/<name>` (and the
-  harness-less `POST /tools/<name>`) are only ever unified against
-  `dispatch_tool/5`'s fixed clause table** (in `codex_harness.pl`) —
-  an unknown or attacker-chosen name can never resolve to an arbitrary
-  predicate; it falls through to the `unknown_tool` error clause
-  instead.
+- **Tool names on `POST /coplex/harnesses/<id>/tools/<name>` (and the
+  harness-less `POST /coplex/tools/<name>`) are only ever unified
+  against `dispatch_tool/5`'s fixed clause table** (in
+  `codex_harness.pl`) — an unknown or attacker-chosen name can never
+  resolve to an arbitrary predicate; it falls through to the
+  `unknown_tool` error clause instead.
 - **The server binds to `localhost` by default.** Pass a different
   `--host` (or set `COPLEX_HOST`) only if the host process
   genuinely runs in a different network namespace from this plugin.
@@ -283,27 +287,27 @@ term.**
 
 ```bash
 # Create a harness against the current repo, scripted adapter for a deterministic demo
-curl -s -X POST http://localhost:8840/harnesses \
+curl -s -X POST http://localhost:8840/coplex/harnesses \
   -H 'Content-Type: application/json' \
   -d '{"root": ".", "adapter": "scripted",
        "mock_replies": [{"content": "hi from curl", "tool_calls": []}]}'
 # => {"ok":true,"id":"3f9a..."}
 
 # Kick off a run, non-blocking
-curl -s -X POST http://localhost:8840/harnesses/3f9a.../run \
+curl -s -X POST http://localhost:8840/coplex/harnesses/3f9a.../run \
   -H 'Content-Type: application/json' \
   -d '{"task": "say hi", "async": true}'
 # => {"ok":true,"id":"3f9a...","started":true,"async":true}
 
 # Poll status
-curl -s http://localhost:8840/harnesses/3f9a...
+curl -s http://localhost:8840/coplex/harnesses/3f9a...
 # => {"ok":true,...,"running":false,"last_answer":"hi from curl",...}
 
 # Read the conversation
-curl -s http://localhost:8840/harnesses/3f9a.../messages
+curl -s http://localhost:8840/coplex/harnesses/3f9a.../messages
 
 # Clean up
-curl -s -X DELETE http://localhost:8840/harnesses/3f9a...
+curl -s -X DELETE http://localhost:8840/coplex/harnesses/3f9a...
 ```
 
 ## Tests

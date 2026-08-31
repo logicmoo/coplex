@@ -14,7 +14,7 @@ vLLM, Ollama's `/v1` shim, LM Studio, ...):
 
 - Select it with `adapter(openai)` -- reachable both in-process
   (`harness_new/2`) and, safely, over REST
-  (`POST /harnesses {"adapter": "openai", ...}` --
+  (`POST /coplex/harnesses {"adapter": "openai", ...}` --
   `coplex_server.pl`'s `sanitize_value/3` still only ever normalizes
   `adapter` to one of a fixed, closed set of atoms).
 - Point it at a real endpoint with `adapter_url` (default the public
@@ -68,18 +68,19 @@ returns a dict with running state, step count, last error, etc. This
 is now exposed over HTTP:
 
 - **Web**: `coplex_server.pl` implements `library(http/thread_httpd)`
-  + `library(http/http_dispatch)`, exposing `GET /harnesses/<id>`
-  (snapshot as JSON) and `POST /harnesses/<id>/run|cancel|reset`. See
-  the README's "REST API" section for the full endpoint table and
-  security model (fixed option allowlist; goal-shaped options like
+  + `library(http/http_dispatch)`, exposing `GET
+  /coplex/harnesses/<id>` (snapshot as JSON) and `POST
+  /coplex/harnesses/<id>/run|cancel|reset`. See the README's "REST
+  API" section for the full endpoint table and security model (fixed
+  option allowlist; goal-shaped options like
   `approval`/`on_event`/`web_search_backend` are never accepted from
   JSON).
-- **Endpoints for a management web UI**: `GET /harnesses` returns a
-  `harnesses` array of `harness_summary/2` dicts (running,
+- **Endpoints for a management web UI**: `GET /coplex/harnesses`
+  returns a `harnesses` array of `harness_summary/2` dicts (running,
   current_task, message/tool-call counts, created_at) alongside the
   plain `ids`, so a dashboard can list every live agent with one
-  request. `POST /harnesses/<id>/run` accepts `{"async": true}` to
-  return immediately (`{ok:true, started:true}`) while the run
+  request. `POST /coplex/harnesses/<id>/run` accepts `{"async": true}`
+  to return immediately (`{ok:true, started:true}`) while the run
   continues in a background thread (`harness_run_async/3` in
   `codex_harness.pl`, which shares its timeout/error handling with the
   synchronous path via `run_body/4`); a UI polls `GET

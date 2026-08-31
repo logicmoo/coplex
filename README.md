@@ -166,25 +166,29 @@ lifecycle hooks (`workbenchStartup`/`workbenchShutdown`) and exposes
 it through the plugin-api (`status`/`config`/`restart`/`shutdown`); see
 `plugin.json`. Manual equivalent: `python plugin.py start|stop|status|restart`.
 
-Endpoints (JSON in, JSON out, except `/coplex` itself which is HTML):
+Endpoints (JSON in, JSON out, except `/coplex` itself which is HTML).
+Every path below is shown in its canonical, documented `/coplex`-
+prefixed form; each also answers unprefixed at the bare root purely so
+the workbench's stripped-prefix proxy mount can reach it (see
+"REST API" in `docs/04-rest-api.md` for the mechanics):
 
-| Method | Path                          | Behavior                                   |
-|--------|-------------------------------|---------------------------------------------|
-| GET    | `/coplex`                     | Self-contained HTML admin dashboard (browse tools, create/run/inspect/delete harnesses). |
-| GET    | `/coplex/endpoints`           | Status/endpoint-list JSON (used to live at `/coplex` itself -- see below). |
-| GET    | `/health`                     | Liveness check.                              |
-| GET    | `/tools`                      | `harness_tool_specs/1`, each entry annotated with a real `method`/`endpoint` (below). |
-| POST   | `/tools/<name>`               | `harness_tool/4` against a shared, lazily-created harness; body is the tool's Arguments. No harness id needed. |
-| GET    | `/harnesses`                  | `harness_list/1` ids, plus a `harnesses` array of `harness_summary/2` status dicts (see below). |
-| POST   | `/harnesses`                  | `harness_new/2` (safe option subset below).  |
-| GET    | `/harnesses/<id>`             | `harness_snapshot/2`.                        |
-| DELETE | `/harnesses/<id>`             | `harness_close/1`.                           |
-| POST   | `/harnesses/<id>/run`         | `harness_run/4`; body `{task, context?, async?}`. |
-| POST   | `/harnesses/<id>/cancel`      | `harness_cancel/1`.                          |
-| POST   | `/harnesses/<id>/reset`       | `harness_reset/1`.                           |
-| GET    | `/harnesses/<id>/messages`    | `harness_messages/2`.                        |
-| POST   | `/harnesses/<id>/tools/<name>`| `harness_tool/4`; body is the tool's Arguments.|
-| POST   | `/shutdown`                   | Graceful self-terminate (replies, then halts).|
+| Method | Path                                 | Behavior                            |
+|--------|--------------------------------------|--------------------------------------|
+| GET    | `/coplex`                            | Self-contained HTML admin dashboard (browse tools, create/run/inspect/delete harnesses). |
+| GET    | `/coplex/endpoints`                  | Status/endpoint-list JSON (used to live at `/coplex` itself -- see below). |
+| GET    | `/coplex/health`                     | Liveness check.                              |
+| GET    | `/coplex/tools`                      | `harness_tool_specs/1`, each entry annotated with a real `method`/`endpoint` (below). |
+| POST   | `/coplex/tools/<name>`               | `harness_tool/4` against a shared, lazily-created harness; body is the tool's Arguments. No harness id needed. |
+| GET    | `/coplex/harnesses`                  | `harness_list/1` ids, plus a `harnesses` array of `harness_summary/2` status dicts (see below). |
+| POST   | `/coplex/harnesses`                  | `harness_new/2` (safe option subset below).  |
+| GET    | `/coplex/harnesses/<id>`             | `harness_snapshot/2`.                        |
+| DELETE | `/coplex/harnesses/<id>`             | `harness_close/1`.                           |
+| POST   | `/coplex/harnesses/<id>/run`         | `harness_run/4`; body `{task, context?, async?}`. |
+| POST   | `/coplex/harnesses/<id>/cancel`      | `harness_cancel/1`.                          |
+| POST   | `/coplex/harnesses/<id>/reset`       | `harness_reset/1`.                           |
+| GET    | `/coplex/harnesses/<id>/messages`    | `harness_messages/2`.                        |
+| POST   | `/coplex/harnesses/<id>/tools/<name>`| `harness_tool/4`; body is the tool's Arguments.|
+| POST   | `/coplex/shutdown`                   | Graceful self-terminate (replies, then halts).|
 
 Unknown/nonexistent harness ids return HTTP 404; a `run` request against
 a harness that's already running returns HTTP 409; internal errors
@@ -210,10 +214,10 @@ The JSON status/endpoint-list document that used to live at `GET
 
 ### Calling a tool directly
 
-`GET /tools` used to only return `name`/`risk`/`description`/`schema`,
-leaving a UI to guess a URL for "running" a tool -- which produced
-broken, non-routable URLs like `http://host:port/read_file`. Each
-entry now also carries the endpoint that actually works:
+`GET /coplex/tools` used to only return `name`/`risk`/`description`/
+`schema`, leaving a UI to guess a URL for "running" a tool -- which
+produced broken, non-routable URLs like `http://host:port/read_file`.
+Each entry now also carries the endpoint that actually works:
 
 ```json
 {"name": "read_file", "risk": "read_only",
@@ -222,41 +226,41 @@ entry now also carries the endpoint that actually works:
  "method": "POST", "endpoint": "/coplex/tools/read_file"}
 ```
 
-`POST /tools/<name>` (equivalently `/coplex/tools/<name>`) runs that
-tool immediately against a single shared harness that's created lazily
-on first use with the same defaults as `POST /harnesses` with an empty
-body (`root: "."`, `allow_shell`/`allow_network` both `false`,
+`POST /coplex/tools/<name>` runs that tool immediately against a
+single shared harness that's created lazily on first use with the
+same defaults as `POST /coplex/harnesses` with an empty body
+(`root: "."`, `allow_shell`/`allow_network` both `false`,
 `approval: none`). It's for callers that just want to run one tool
 without first creating and tearing down a harness; an unknown tool
 name still comes back as a normal `200` with
 `{"ok": false, "error": {"type": "unknown_tool", ...}}`, matching
-`POST /harnesses/<id>/tools/<name>`'s behavior.
+`POST /coplex/harnesses/<id>/tools/<name>`'s behavior.
 
 
 ### Building a UI around this API
 
-`POST /harnesses/<id>/run` blocks until the agent loop finishes by
-default -- fine for scripts, awkward for a web UI that wants to render
-progress. Pass `{"async": true}` in the body instead:
+`POST /coplex/harnesses/<id>/run` blocks until the agent loop finishes
+by default -- fine for scripts, awkward for a web UI that wants to
+render progress. Pass `{"async": true}` in the body instead:
 
 ```
-POST /harnesses/<id>/run  {"task": "...", "async": true}
+POST /coplex/harnesses/<id>/run  {"task": "...", "async": true}
 -> {"ok": true, "id": "...", "started": true, "async": true}
 ```
 
 The run then continues in a background thread; poll `GET
-/harnesses/<id>` (or the lighter list below) until `running` flips back
-to `false`, then read `last_answer`/`last_error`. A second `run` while
-one is already in flight is rejected with HTTP 409 instead of
-corrupting shared state, so a UI's "run" button can safely no-op on a
-double click.
+/coplex/harnesses/<id>` (or the lighter list below) until `running`
+flips back to `false`, then read `last_answer`/`last_error`. A second
+`run` while one is already in flight is rejected with HTTP 409 instead
+of corrupting shared state, so a UI's "run" button can safely no-op on
+a double click.
 
-`GET /harnesses` returns both the original `ids` array and a
+`GET /coplex/harnesses` returns both the original `ids` array and a
 `harnesses` array of `harness_summary/2` dicts -- `id`, `current_task`,
 `iteration`, `running`, `cancelled`, `last_answer`, `last_error`,
 `message_count`, `tool_call_count`, `created_at` -- so a dashboard can
 render a table of every live harness with one request instead of one
-per row. `GET /harnesses/<id>` still returns the full
+per row. `GET /coplex/harnesses/<id>` still returns the full
 `harness_snapshot/2` (same fields plus the complete `messages` and
 `tool_activity` history) for a detail view.
 
@@ -272,28 +276,28 @@ beyond local development.
 bodies are never parsed as Prolog source and never used to build a
 callable term:
 
-- `POST /harnesses` only honors a fixed allowlist of scalar/text/list
-  `harness_new/2` options (`root`, `cwd`, `model`, `instructions`,
-  `allow_shell`, `allow_network`, `allowed_hosts`, `writable_paths`,
-  `readable_paths`, `timeout`, `max_steps`, `transcript`,
-  `mock_replies`, `allowed_tools`, `adapter_url`, `adapter_api_key`,
-  ... -- see `config()` in `plugin.py` for the full, current list).
-  `adapter` is normalized to one of three fixed atoms -- `scripted`,
-  `mock`, or `openai` -- any other value falls back to `scripted`.
-  `adapter_api_key` is plain text, never a callable, but it is real
-  network-facing configuration: see the Adapter contract section
-  above for how the key is redacted/never echoed back despite living
-  in harness state.
+- `POST /coplex/harnesses` only honors a fixed allowlist of scalar/
+  text/list `harness_new/2` options (`root`, `cwd`, `model`,
+  `instructions`, `allow_shell`, `allow_network`, `allowed_hosts`,
+  `writable_paths`, `readable_paths`, `timeout`, `max_steps`,
+  `transcript`, `mock_replies`, `allowed_tools`, `adapter_url`,
+  `adapter_api_key`, ... -- see `config()` in `plugin.py` for the
+  full, current list). `adapter` is normalized to one of three fixed
+  atoms -- `scripted`, `mock`, or `openai` -- any other value falls
+  back to `scripted`. `adapter_api_key` is plain text, never a
+  callable, but it is real network-facing configuration: see the
+  Adapter contract section above for how the key is redacted/never
+  echoed back despite living in harness state.
 - `approval`, `on_event`, `parent`, and `web_search_backend` are
   **never** settable over REST, because `codex_harness.pl` eventually
   `call/N`'s each of them -- accepting them from untrusted JSON would
   be a remote-code-execution vector. Set them only via a direct,
   in-process `harness_new/2` call.
-- Tool names on `POST /harnesses/<id>/tools/<name>` (and the
-  harness-less `POST /tools/<name>`) are only ever unified against
-  `dispatch_tool/5`'s fixed clause table (see `codex_harness.pl`), so
-  an unknown/attacker-chosen name can never resolve to an arbitrary
-  predicate.
+- Tool names on `POST /coplex/harnesses/<id>/tools/<name>` (and the
+  harness-less `POST /coplex/tools/<name>`) are only ever unified
+  against `dispatch_tool/5`'s fixed clause table (see
+  `codex_harness.pl`), so an unknown/attacker-chosen name can never
+  resolve to an arbitrary predicate.
 - CORS defaults to `*` (any origin), which is safe *only* because the
   server binds to `localhost` by default; tighten
   `COPLEX_CORS_ORIGIN` if that default host binding is ever
