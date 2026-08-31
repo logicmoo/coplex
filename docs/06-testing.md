@@ -14,10 +14,10 @@ swipl -g run_tests -t halt test/test_codex_harness.pl
 swipl -g run_tests -t halt test/test_codex_harness_server.pl
 ```
 
-(34 tests / 18 tests respectively at the time of writing — see below
+(42 tests / 22 tests respectively at the time of writing — see below
 for what each one covers.)
 
-## `test/test_codex_harness.pl` — 34 tests, by category
+## `test/test_codex_harness.pl` — 42 tests, by category
 
 **Lifecycle & conversation state**
 - `new_close` — create/destroy doesn't leak or error.
@@ -98,6 +98,37 @@ for what each one covers.)
 - `tool_specs_nonempty` — the tool catalog is never empty (a basic
   sanity check the model-facing spec list actually populates).
 
+**Interactive approvals (`approval_mode`)**
+- `approval_interactive_allow` — a paused `write_file` call (driven
+  from a background thread, since the call blocks synchronously)
+  actually completes once `harness_decide_approval/3` allows it.
+- `approval_interactive_deny` — a denied call never touches the
+  filesystem — proves `deny` isn't just "doesn't throw", the tool
+  genuinely didn't run.
+- `approval_read_only_bypasses_gating` — a `read_only` tool
+  (`git_status`) runs immediately even in `approval_mode(interactive)`
+  and never appears in `pending_approvals` — the mode only ever gates
+  non-`read_only` risk.
+- `approval_deny_risky_denies_without_pause` — `approval_mode
+  (deny_risky)` denies a risky call in well under a second (asserted
+  via wall-clock timing), proving it's a genuine immediate denial, not
+  an accidental one-tick pause.
+- `approval_timeout_auto_denies` — a short `approval_timeout` with no
+  decision ever posted auto-denies at (not before) the deadline, with
+  an error message mentioning the timeout.
+- `approval_visible_in_snapshot_and_summary` — while paused, the call
+  shows up in `harness_snapshot/2`'s `pending_approvals` (with the
+  right `call_id`/`tool`/`risk`) and `harness_summary/2`'s
+  `pending_approval_count`.
+- `approval_harness_close_denies_pending` — `harness_close/1` resolves
+  a pending approval (as denied) and returns promptly, rather than
+  hanging until `approval_timeout` elapses or leaking the blocked
+  thread.
+- `approval_unknown_call_id_errors` — `harness_decide_approval/3` on a
+  `call_id` that isn't currently pending throws
+  `existence_error(pending_approval, CallId)`, which
+  `test_codex_harness_server.pl` separately proves maps to HTTP 404.
+
 **Git tools**
 - `git_status_and_log`, `git_show_head` — read-only git subcommands
   return expected shapes (also covers the "result always overwrites
@@ -108,7 +139,7 @@ for what each one covers.)
   is genuinely read-only, proving `subagent_allow_writes` actually
   gates write access rather than being decorative.
 
-## `test/test_codex_harness_server.pl` — 18 tests
+## `test/test_codex_harness_server.pl` — 22 tests
 
 - `health` — `GET /coplex/health` liveness.
 - `admin_ui_serves_html` — `GET /coplex` replies HTML (not JSON),
@@ -176,6 +207,23 @@ for what each one covers.)
   and a normal `GET /health` (bare-root parity route) reply carries the
   same header — protects the browser-UI CORS contract described in
   [04-rest-api.md](04-rest-api.md) for both route families.
+- `approval_over_rest_allow` — full round trip over real HTTP: a
+  `write_file` call posted from a background thread pauses, the main
+  thread polls `GET /coplex/harnesses/<id>` for `pending_approvals`,
+  posts `{"decision": "allow"}` to
+  `POST .../approvals/<call_id>`, and the file is confirmed written
+  afterward via a follow-up `read_file` call.
+- `approval_over_rest_deny` — same shape, `{"decision": "deny"}`; the
+  file is confirmed to never have been written.
+- `approval_unknown_call_id_is_404` — `POST .../approvals/<call_id>`
+  for a `call_id` that was never pending returns HTTP 404, matching
+  `unknown_harness_is_404`'s pattern for the harness-id case.
+- `approval_mode_deny_risky_over_rest` — `{"approval_mode":
+  "deny_risky"}` is accepted by `POST /coplex/harnesses` and actually
+  changes behavior end-to-end (an immediate denial on a risky tool
+  call) — checked via observable behavior rather than trusting that
+  harness creation alone proves the option took effect, since creation
+  never echoes options back.
 
 ## Testing philosophy notes worth preserving
 
@@ -206,3 +254,14 @@ for what each one covers.)
   with `setup_call_cleanup/3` combined with a disjunction) to avoid
   plunit's "succeeded with choicepoint" warning — see `with_h/2` in
   `test_codex_harness.pl`.
+- **`assertion/1` discards variable bindings its argument makes.**
+  `assertion(get_dict(k, Dict, V))` followed by a later
+  `assertion(V == x)` fails with `V` unbound again on the second call
+  — bind first with a plain `get_dict/3`, then wrap only the final
+  comparison in `assertion/1`. Bit several of the interactive-approval
+  tests above during development; see `FEATURE_GUIDE.md`'s pitfall
+  list.
+- **A JSON round-trip always decodes string values as Prolog strings,
+  never atoms**, even when the server-side dict used an atom — REST
+  assertions compare `Reply.error.type` against `"denied"`, not
+  `denied`. See `FEATURE_GUIDE.md`'s pitfall list.

@@ -38,6 +38,7 @@ caller-settable:
 | `allowed_hosts`, `writable_paths`, `readable_paths` | options | Extra allowlists layered on top of the mandatory repo-root fence. |
 | `subagent_limit`, `subagent_allow_writes` | options | Bounds the child-harness worker pool. |
 | `approval`, `on_event` | options | Goal-shaped hooks — **in-process only**, never settable from REST JSON. |
+| `approval_mode`, `approval_timeout` | options | Closed-enum (`none`/`interactive`/`deny_risky`) approval gate + its pause deadline in seconds — REST-safe, layered *underneath* `approval(Goal)` (only applies when no `approval(Goal)` hook is set). See `docs/03-tools-and-permissions.md`'s permission-model diagram and `docs/04-rest-api.md`'s "Interactive approvals" section. |
 | `transcript` | options | Optional JSONL audit-log path. |
 | `secrets` | options | Strings to redact (`***`) from every emitted event/tool result. |
 | `default_test_command`, `mock_script`, `web_search_backend` | options | Behavioral knobs for `run_tests`, the scripted adapter, and `web_search`. |
@@ -57,11 +58,12 @@ caller-settable:
 | `harness_cancel(+H)` | no | Cooperative cancel flag; only takes effect *during* a run. |
 | `harness_reset(+H)` | no | Clears conversation/messages/errors, keeps config. |
 | `harness_messages(+H, -Msgs)` | no | Full conversation history. |
-| `harness_snapshot(+H, -Dict)` | no | Full observation surface (adds `created_at` to the fields above). |
-| `harness_summary(+H, -Dict)` | no | Lighter observation surface for list views — message/tool-call *counts* instead of full histories. |
+| `harness_snapshot(+H, -Dict)` | no | Full observation surface (adds `created_at` and `pending_approvals` -- one `{call_id, tool, risk, arguments, requested_at}` dict per call currently paused by `approval_mode(interactive)` -- to the fields above). |
+| `harness_summary(+H, -Dict)` | no | Lighter observation surface for list views — message/tool-call *counts* (including `pending_approval_count`) instead of full histories. |
 | `harness_tool(+H, +Name, +Args, -Result)` | depends on tool | Invoke one tool directly, bypassing the model loop. |
 | `harness_tool_specs(-Specs)` | no | Static tool catalog (name/risk/description/schema). |
 | `harness_list(-Ids)` | no | All currently live harness ids. |
+| `harness_decide_approval(+H, +CallId, +Decision)` | no | Resolve a call paused by `approval_mode(interactive)` (`Decision` is `allow` or `deny`); throws `existence_error(pending_approval, CallId)` if nothing with that id is currently pending. See `docs/03-tools-and-permissions.md`. |
 
 ## The agent loop
 

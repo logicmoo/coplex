@@ -363,4 +363,108 @@ test(cors_preflight_and_headers, [setup(setup_server), cleanup(teardown_server)]
     assertion(GetCode == 200),
     assertion(GetOrigin == '*').
 
+% -- interactive approval workflow over REST --------------------------
+%
+% POST /coplex/harnesses/<id>/tools/<name> blocks the HTTP request
+% itself while approval_mode(interactive) waits (there's no async
+% variant of the direct tool-call endpoint), so these tests fire that
+% POST from a background thread and drive/observe the pause from the
+% main test thread via ordinary GET/POST calls, the same way a real
+% two-client setup (an agent posting the tool call, a human's browser
+% deciding it) would.
+
+wait_pending_rest(_, 0, _) :- !, fail.
+wait_pending_rest(ItemUrl, N, CallId) :-
+    http_get_json(ItemUrl, _{}, Snap),
+    (   Snap.pending_approvals = [First|_]
+    ->  CallId = First.call_id
+    ;   sleep(0.05),
+        N1 is N - 1,
+        wait_pending_rest(ItemUrl, N1, CallId)
+    ).
+
+http_post_json_status(Url, Body, Reply, Code) :-
+    setup_call_cleanup(
+        http_open(Url, In,
+                   [ post(json(Body)),
+                     status_code(Code),
+                     header(content_type, _)
+                   ]),
+        json_read_dict(In, Reply),
+        close(In)).
+
+test(approval_over_rest_allow, [setup(setup_server), cleanup(teardown_server)]) :-
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
+    http_post_json(HarnessesUrl,
+                   _{root:".", approval_mode:"interactive", approval_timeout:10},
+                   Created),
+    Id = Created.id,
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
+    format(atom(ToolUrl), '~w/coplex/harnesses/~w/tools/write_file', [Base, Id]),
+    thread_create(
+        http_post_json(ToolUrl, _{path:"rest_a.txt", content:"hi"}, _ToolReply),
+        Tid, []),
+    wait_pending_rest(ItemUrl, 100, CallId),
+    format(atom(ApprovalUrl), '~w/coplex/harnesses/~w/approvals/~w', [Base, Id, CallId]),
+    http_post_json(ApprovalUrl, _{decision:"allow"}, DecideReply),
+    assertion(DecideReply.ok == true),
+    thread_join(Tid, _),
+    format(atom(ReadUrl), '~w/coplex/harnesses/~w/tools/read_file', [Base, Id]),
+    http_post_json(ReadUrl, _{path:"rest_a.txt"}, ReadReply),
+    assertion(ReadReply.ok == true),
+    assertion(ReadReply.content == "hi"),
+    http_delete_json(ItemUrl, _).
+
+test(approval_over_rest_deny, [setup(setup_server), cleanup(teardown_server)]) :-
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
+    http_post_json(HarnessesUrl,
+                   _{root:".", approval_mode:"interactive", approval_timeout:10},
+                   Created),
+    Id = Created.id,
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
+    format(atom(ToolUrl), '~w/coplex/harnesses/~w/tools/write_file', [Base, Id]),
+    thread_create(
+        http_post_json(ToolUrl, _{path:"rest_b.txt", content:"hi"}, _ToolReply),
+        Tid, []),
+    wait_pending_rest(ItemUrl, 100, CallId),
+    format(atom(ApprovalUrl), '~w/coplex/harnesses/~w/approvals/~w', [Base, Id, CallId]),
+    http_post_json(ApprovalUrl, _{decision:"deny"}, DecideReply),
+    assertion(DecideReply.ok == true),
+    thread_join(Tid, _),
+    format(atom(ReadUrl), '~w/coplex/harnesses/~w/tools/read_file', [Base, Id]),
+    http_post_json(ReadUrl, _{path:"rest_b.txt"}, ReadReply),
+    assertion(ReadReply.ok == false),
+    assertion(ReadReply.error.type == "not_found"),
+    http_delete_json(ItemUrl, _).
+
+test(approval_unknown_call_id_is_404, [setup(setup_server), cleanup(teardown_server)]) :-
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
+    http_post_json(HarnessesUrl, _{root:"."}, Created),
+    Id = Created.id,
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
+    format(atom(ApprovalUrl), '~w/coplex/harnesses/~w/approvals/does-not-exist', [Base, Id]),
+    http_post_json_status(ApprovalUrl, _{decision:"allow"}, _Reply, Code),
+    assertion(Code == 404),
+    http_delete_json(ItemUrl, _).
+
+test(approval_mode_deny_risky_over_rest, [setup(setup_server), cleanup(teardown_server)]) :-
+    % approval_mode/approval_timeout must be accepted from JSON like any
+    % other safe_option_key/1 -- checked end-to-end via observable
+    % behaviour (an immediate denial), not just that harness creation
+    % succeeds, since creation never echoes options back.
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex/harnesses'], HarnessesUrl),
+    http_post_json(HarnessesUrl, _{root:".", approval_mode:"deny_risky"}, Created),
+    assertion(Created.ok == true),
+    Id = Created.id,
+    format(atom(ToolUrl), '~w/coplex/harnesses/~w/tools/write_file', [Base, Id]),
+    http_post_json(ToolUrl, _{path:"rest_c.txt", content:"hi"}, Reply),
+    assertion(Reply.ok == false),
+    assertion(Reply.error.type == "denied"),
+    format(atom(ItemUrl), '~w/coplex/harnesses/~w', [Base, Id]),
+    http_delete_json(ItemUrl, _).
+
 :- end_tests(codex_harness_server).

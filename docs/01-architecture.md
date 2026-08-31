@@ -108,8 +108,8 @@ worth keeping them separate mentally:
    dict is atomic, regardless of which thread is doing it.
 2. **The run thread.** `harness_run/4` executes synchronously in
    whatever thread calls it (e.g. the HTTP worker thread handling a
-   `POST /harnesses/<id>/run` request — SWI's `http_dispatch` runs each
-   request on its own worker thread by default). `harness_run_async/3`
+   `POST /coplex/harnesses/<id>/run` request — SWI's `http_dispatch` runs
+   each request on its own worker thread by default). `harness_run_async/3`
    instead marks the harness running synchronously (so the caller's
    very next state read already reflects it) and then hands the actual
    agent loop to a **detached** `thread_create/3` so the calling thread

@@ -302,6 +302,7 @@ admin_ui_html(Html) :-
   aside, .detail { min-width: 0; padding: 14px; }
   aside { border-right: 1px solid var(--line); }
   .panel { border: 1px solid var(--line); background: rgba(7, 28, 35, .88); margin-bottom: 12px; }
+  .panel.attention { border-color: var(--amber); }
   .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--line); background: #12253a; }
   .panel-body { padding: 11px; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
@@ -315,6 +316,7 @@ admin_ui_html(Html) :-
   .state.running { color: var(--amber); }
   .state.idle { color: var(--green); }
   .state.error { color: var(--red); }
+  .state.pending { color: var(--amber); }
   .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
   .summary div { padding: 8px; border: 1px solid var(--line); background: #071b22; }
   .summary b, .summary span { display: block; overflow-wrap: anywhere; }
@@ -326,6 +328,15 @@ admin_ui_html(Html) :-
   .event { display: grid; grid-template-columns: 32px minmax(90px, .4fr) minmax(0, 1.6fr); gap: 8px; padding: 7px; border: 1px solid #183d48; background: #071b22; }
   .event code { color: var(--violet); }
   .event span:last-child { color: var(--muted); overflow-wrap: anywhere; white-space: pre-wrap; }
+  .approvals { display: grid; gap: 8px; }
+  .approval-row { display: grid; gap: 7px; padding: 9px; border: 1px solid var(--amber); background: #1c1706; }
+  .approval-row .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .approval-row .head b { color: var(--amber); }
+  .approval-row pre { max-height: 14vh; }
+  .approval-row .actions { display: flex; gap: 7px; }
+  .approval-row .actions button { flex: 1; }
+  .btn-allow { color: var(--green); border-color: #28745a; }
+  .btn-deny { color: var(--red); border-color: #70404a; }
   .risk-read_only { color: var(--muted); }
   .risk-write { color: var(--amber); border-color: var(--amber); }
   .risk-process, .risk-network { color: var(--red); border-color: var(--red); }
@@ -378,6 +389,14 @@ admin_ui_html(Html) :-
             <option value='gpt-4.1-mini'></option>
           </datalist>
         </label>
+        <label>Approval mode
+          <select id='f-approval-mode'>
+            <option value='none'>none (no gating)</option>
+            <option value='interactive'>interactive (pause for a decision)</option>
+            <option value='deny_risky'>deny_risky (auto-deny, no pause)</option>
+          </select>
+        </label>
+        <label>Approval timeout (s) <input id='f-approval-timeout' type='number' min='1' value='300'></label>
         <label class='inline'><input type='checkbox' id='f-shell'> allow_shell</label>
         <label class='inline'><input type='checkbox' id='f-network'> allow_network</label>
         <button id='submit' class='wide' type='submit'>Create harness</button>
@@ -395,6 +414,10 @@ admin_ui_html(Html) :-
   <section class='detail'>
     <div id='no-selection' class='panel'><div class='empty'>Select or create a harness to inspect it.</div></div>
     <div id='harness-detail' hidden>
+      <section id='approvals-panel' class='panel' hidden>
+        <div class='panel-head'><h2>Pending approvals</h2><span id='approval-count' class='state pending'>0</span></div>
+        <div id='approvals' class='panel-body approvals'></div>
+      </section>
       <section class='panel'>
         <div class='panel-head'>
           <h2>Selected harness</h2>
@@ -497,11 +520,13 @@ function renderHarnessList(harnesses) {
     return;
   }
   list.innerHTML = harnesses.map((h) => {
-    const state = h.running ? 'running' : (h.last_error ? 'error' : 'idle');
+    const pending = h.pending_approval_count || 0;
+    const state = pending ? 'pending' : (h.running ? 'running' : (h.last_error ? 'error' : 'idle'));
+    const stateLabel = pending ? `${pending} pending` : state;
     return `
     <button class='row-btn ${h.id === selectedId ? 'active' : ''}' data-id='${esc(h.id)}' type='button'>
       <span>${esc(h.current_task) || '(no task yet)'}</span>
-      <b class='state ${state}'>${state}</b>
+      <b class='state ${state}'>${esc(stateLabel)}</b>
       <small>${esc(h.id).slice(0, 8)} - msgs ${esc(h.message_count)} - ${new Date((h.created_at || 0) * 1000).toLocaleString()}</small>
     </button>`;
   }).join('');
@@ -526,6 +551,45 @@ function renderMessages(messages) {
   }).join('') : `<div class='empty'>No messages yet.</div>`;
 }
 
+function renderApprovals(id, pending) {
+  const panel = byId('approvals-panel');
+  byId('approval-count').textContent = String(pending.length);
+  if (!pending.length) {
+    panel.hidden = true;
+    byId('approvals').innerHTML = '';
+    return;
+  }
+  panel.hidden = false;
+  byId('approvals').innerHTML = pending.map((p) => `
+    <div class='approval-row' data-call-id='${esc(p.call_id)}'>
+      <div class='head'>
+        <b>${esc(p.tool)}</b>
+        <span class='state risk-${esc(p.risk)}'>${esc(p.risk)}</span>
+      </div>
+      <pre>${esc(jsonText(p.arguments))}</pre>
+      <small>requested ${new Date((p.requested_at || 0) * 1000).toLocaleString()} - call_id ${esc(p.call_id)}</small>
+      <div class='actions'>
+        <button class='btn-allow' type='button' data-decision='allow'>Allow</button>
+        <button class='btn-deny' type='button' data-decision='deny'>Deny</button>
+      </div>
+    </div>`).join('');
+  byId('approvals').querySelectorAll('[data-decision]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('[data-call-id]');
+      void decideApproval(id, row.dataset.callId, btn.dataset.decision);
+    });
+  });
+}
+
+async function decideApproval(id, callId, decision) {
+  try {
+    await api(`/harnesses/${encodeURIComponent(id)}/approvals/${encodeURIComponent(callId)}`, {
+      method: 'POST', body: JSON.stringify({decision})
+    });
+    await refreshAll();
+  } catch (error) { showError(error); }
+}
+
 async function refreshSelected() {
   if (!selectedId) {
     byId('no-selection').hidden = false;
@@ -543,9 +607,10 @@ async function refreshSelected() {
   }
   byId('no-selection').hidden = true;
   byId('harness-detail').hidden = false;
-  const state = snap.running ? 'running' : (snap.last_error ? 'error' : 'idle');
+  const pending = snap.pending_approvals || [];
+  const state = pending.length ? 'pending' : (snap.running ? 'running' : (snap.last_error ? 'error' : 'idle'));
   byId('harness-summary').innerHTML = [
-    ['Status', state], ['Iteration', snap.iteration], ['Messages', (snap.messages || []).length], ['Tools run', (snap.tool_activity || []).length]
+    ['Status', pending.length ? `${pending.length} pending` : state], ['Iteration', snap.iteration], ['Messages', (snap.messages || []).length], ['Tools run', (snap.tool_activity || []).length]
   ].map(([label, value]) => `<div><b class='state ${state}'>${esc(value)}</b><span>${esc(label)}</span></div>`).join('');
   byId('harness-task').textContent = snap.current_task || '(no task submitted yet)';
   const answerEl = byId('harness-answer');
@@ -557,6 +622,7 @@ async function refreshSelected() {
     answerEl.className = 'answer';
   }
   byId('cancel-btn').disabled = !snap.running;
+  renderApprovals(selectedId, pending);
   renderMessages(snap.messages || []);
 }
 
@@ -589,7 +655,9 @@ byId('create-form').addEventListener('submit', async (ev) => {
       root: byId('f-root').value || '.',
       adapter: byId('f-adapter').value,
       allow_shell: byId('f-shell').checked,
-      allow_network: byId('f-network').checked
+      allow_network: byId('f-network').checked,
+      approval_mode: byId('f-approval-mode').value,
+      approval_timeout: Number(byId('f-approval-timeout').value) || 300
     };
     const model = byId('f-model').value;
     if (model) body.model = model;
@@ -717,6 +785,7 @@ rest_endpoints([
     "POST   /coplex/harnesses/<id>/reset",
     "GET    /coplex/harnesses/<id>/messages",
     "POST   /coplex/harnesses/<id>/tools/<name>",
+    "POST   /coplex/harnesses/<id>/approvals/<call_id>",
     "POST   /coplex/shutdown"
 ]).
 
@@ -765,11 +834,11 @@ spec_dict(spec(Name, Risk, Desc, Schema), Dict) :-
 %   defaults, i.e. exactly what `POST /coplex/harnesses` with an empty
 %   body would create: root ".", allow_shell/allow_network both false,
 %   allowed_tools all, approval none (so nothing blocks waiting on an
-%   external approval callback -- see codex_harness.pl's approve/4).
+%   external approval callback -- see codex_harness.pl's approve/6).
 %   An unknown tool name isn't a routing 404; like the per-harness
 %   route below, it comes back as an ordinary 200 reply with
 %   `{"ok":false, "error":{"type":"unknown_tool", ...}}` (see
-%   codex_harness.pl's known_or_dispatch/4).
+%   codex_harness.pl's known_or_dispatch/5).
 direct_tool_item(Request) :-
     memberchk(method(Method), Request),
     ( Method == options
@@ -910,6 +979,14 @@ dispatch_item([IdS, "tools", NameS], post, Request) :- !,
             ( harness_tool(codex_harness(Id), Name, Body, Result),
               reply_json_dict(Result)
             ))).
+dispatch_item([IdS, "approvals", CallIdS], post, Request) :- !,
+    atom_string(Id, IdS),
+    with_existing_harness(Id,
+        with_json_body(Request, Body,
+            ( flex_decision(Body, Decision),
+              harness_decide_approval(codex_harness(Id), CallIdS, Decision),
+              reply_json_dict(_{ok:true})
+            ))).
 dispatch_item(_Segments, _Method, _Request) :-
     reply_error(404, error(existence_error(http_route, not_found), _)).
 
@@ -936,6 +1013,7 @@ with_json_body(Request, Body, Goal) :-
 %   Maps a caught Prolog error term to the HTTP status code a REST
 %   client should see. Anything not recognised falls back to 500.
 error_status(error(permission_error(start, harness_run, already_running), _), 409) :- !.
+error_status(error(existence_error(pending_approval, _), _), 404) :- !.
 error_status(_, 500).
 
 flex_task_text(Body, Task) :-
@@ -950,6 +1028,20 @@ flex_run_options(Body, Options) :-
 %   other JSON value -- keeps the default blocking behaviour.
 flex_async_flag(Body, Async) :-
     ( get_dict(async, Body, V), V == true -> Async = true ; Async = false ).
+
+%!  flex_decision(+Body, -Decision) is det.
+%   Decision is `allow` only when the request body explicitly says so
+%   (`{"decision": "allow"}`, the shape a REST client sends, or the
+%   bare atom/boolean equivalents for a Prolog-level caller); anything
+%   else -- absent, `"deny"`, `false`, a typo, or any other JSON value
+%   -- normalizes to `deny`. A fail-safe default: an ambiguous request
+%   must never be misread as an approval.
+flex_decision(Body, Decision) :-
+    (   get_dict(decision, Body, V),
+        ( V == "allow" ; V == allow ; V == true )
+    ->  Decision = allow
+    ;   Decision = deny
+    ).
 
 reply_error(Code, Error) :-
     message_to_string_safe(Error, Msg),
@@ -987,6 +1079,7 @@ safe_option_key(secrets). safe_option_key(default_test_command).
 safe_option_key(mock_replies). safe_option_key(allowed_tools).
 safe_option_key(adapter). safe_option_key(adapter_url).
 safe_option_key(adapter_api_key).
+safe_option_key(approval_mode). safe_option_key(approval_timeout).
 
 dict_options(Dict, Options) :-
     dict_pairs(Dict, _, Pairs),

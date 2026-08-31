@@ -44,24 +44,51 @@ flowchart TD
     B -- no --> DenyAllow["permission_error:\n'Tool not permitted in this harness'"]
     B -- yes --> C{"Name known in\nharness_tool_specs/1?"}
     C -- no --> DenyUnknown["unknown_tool error"]
-    C -- yes --> D["approve/4:\napproval == none → allow;\nelse call(Approval, Name, Args, Decision)"]
-    D -- "deny(Why) / anything\nother than allow" --> DenyApproval["denied error, message = Why"]
-    D -- allow --> E["dispatch_tool/5 → tool_*/3\n(tool's own capability checks:\nallow_shell / allow_network /\nwritable_allowed / path fence)"]
+    C -- yes --> D["approve/6"]
+    D --> D1{"approval(Goal)\nset?"}
+    D1 -- yes --> D1a["call(Goal, Name, Args, Decision)\n-- decides every call,\nany risk, in-process only"]
+    D1 -- no --> D2{"Risk == read_only?"}
+    D2 -- yes --> Allow["allow"]
+    D2 -- no --> D3{"approval_mode"}
+    D3 -- "none (default)" --> Allow
+    D3 -- deny_risky --> DenyMode["deny immediately,\nno pause"]
+    D3 -- interactive --> Wait["wait_for_approval/6:\npause + poll every 0.25s\nfor a REST decision,\ncancel, or approval_timeout"]
+    Wait -- allow --> Allow
+    Wait -- "deny / timeout / cancelled" --> DenyMode
+    D1a -- "deny(Why) / anything\nother than allow" --> DenyApproval["denied error, message = Why"]
+    D1a -- allow --> Allow
+    Allow --> E["dispatch_tool/5 → tool_*/3\n(tool's own capability checks:\nallow_shell / allow_network /\nwritable_allowed / path fence)"]
     E --> F["result recorded\n(record_tool/2) + emitted\n(tool_start/tool_finish events)"]
 ```
 
-Two independent knobs, both must pass, plus per-tool self-checks:
+Three independent knobs, all must pass, plus per-tool self-checks:
 
 1. **`allowed_tools`** (harness-level allowlist) — coarsest gate,
    checked first, purely by tool name.
 2. **`approval(Goal)`** (harness-level hook) — if set,
    `call(Goal, Name, Args, Decision)` decides `allow` or `deny(Why)`
-   *per call*, with full visibility into the arguments. This is the
-   hook you'd wire up to a human-in-the-loop confirmation UI.
-3. **Per-tool capability flags** — `allow_shell`, `allow_network`, and
+   *per call*, for every risk level, with full visibility into the
+   arguments. In-process only, never settable from REST JSON (see
+   `docs/04-rest-api.md`'s security model) — this is the hook you'd
+   wire up to a human-in-the-loop confirmation from Prolog code
+   itself.
+3. **`approval_mode`** (harness-level enum, `none`/`interactive`/
+   `deny_risky`) — a second, REST-safe gate that only ever applies
+   when no `approval(Goal)` hook is configured, and never touches
+   `read_only`-risk calls regardless of mode. `interactive` pauses a
+   non-`read_only` call (`wait_for_approval/6`) until
+   `POST /coplex/harnesses/<id>/approvals/<call_id>` resolves it, a
+   cancel/close denies it, or `approval_timeout` elapses (auto-deny);
+   `deny_risky` denies the same calls immediately, with no pause. See
+   `docs/04-rest-api.md`'s "Interactive approvals" section for the
+   full REST-facing picture, and `FEATURE_GUIDE.md` §2 for
+   implementation notes (the pending-approval registry, the SWI dict/
+   `findall` gotcha it ran into, and the atom/string `call_id` pitfall).
+4. **Per-tool capability flags** — `allow_shell`, `allow_network`, and
    the path-safety functions below — checked *inside* the specific
-   `tool_*` predicate, independent of the two gates above. A tool can
-   pass both `allowed_tools` and `approval` and still be refused here.
+   `tool_*` predicate, independent of the gates above. A tool can pass
+   `allowed_tools`, `approval`, and `approval_mode` and still be
+   refused here.
 
 ## Path safety
 

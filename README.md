@@ -118,6 +118,10 @@ shell later), `allowed_hosts`, `writable_paths`, `readable_paths`,
 `max_output_bytes`, `max_download_bytes`, `timeout`, `command_timeout`,
 `max_steps`, `subagent_limit`, `subagent_allow_writes` (default false),
 `approval(Goal)` where `call(Goal, Tool, Args, allow|deny(Reason))`,
+`approval_mode` (`none` (default) | `interactive` | `deny_risky` --
+see "Interactive approvals" below; unlike `approval(Goal)`, this is a
+closed enum and *is* REST-settable), `approval_timeout` (seconds a
+paused `interactive` call waits before auto-denying; default 300),
 `on_event(Goal)`, `transcript(Path)`, `secrets([...])`,
 `default_test_command([Cmd|Args])`, `web_search_backend(Goal)`,
 `mock_replies([...])`, `allowed_tools(all|[...])`, `adapter_url`
@@ -188,11 +192,43 @@ the workbench's stripped-prefix proxy mount can reach it (see
 | POST   | `/coplex/harnesses/<id>/reset`       | `harness_reset/1`.                           |
 | GET    | `/coplex/harnesses/<id>/messages`    | `harness_messages/2`.                        |
 | POST   | `/coplex/harnesses/<id>/tools/<name>`| `harness_tool/4`; body is the tool's Arguments.|
+| POST   | `/coplex/harnesses/<id>/approvals/<call_id>`| `harness_decide_approval/3`; body `{decision: "allow"\|"deny"}` -- resolves a call paused by `approval_mode(interactive)` (see below). 404 if `call_id` isn't currently pending. |
 | POST   | `/coplex/shutdown`                   | Graceful self-terminate (replies, then halts).|
 
 Unknown/nonexistent harness ids return HTTP 404; a `run` request against
 a harness that's already running returns HTTP 409; internal errors
 return HTTP 500 with `{"ok": false, "error": "..."}`.
+
+### Interactive approvals
+
+`approval_mode(interactive)` (or `{"approval_mode": "interactive"}`
+over REST) makes any non-`read_only`-risk tool call **pause** the
+calling thread instead of running immediately: it registers a pending
+approval, shows up in `harness_snapshot/2`'s `pending_approvals` list
+(and `harness_summary/2`'s `pending_approval_count`), and blocks —
+polling every 0.25s so a `harness_cancel/1` is noticed almost
+immediately — until one of three things happens:
+
+- `POST /coplex/harnesses/<id>/approvals/<call_id>` with
+  `{"decision": "allow"}` or `{"decision": "deny"}` resolves it (any
+  other/missing `decision` is treated as `deny` — an ambiguous request
+  is never silently read as an approval).
+- `approval_timeout` seconds elapse with no decision (default 300) —
+  auto-denied.
+- The harness is closed or cancelled while the call is paused —
+  denied immediately (see `harness_close/1`).
+
+`approval_mode(deny_risky)` gates the same tools but never pauses:
+every non-`read_only` call is denied immediately, for unattended REST
+automation that still wants a read-only-safe default with no human in
+the loop. `read_only` tools (like `git_status`, `read_file`) are never
+gated by `approval_mode`, in either mode. This is a separate mechanism
+from the `approval(Goal)` callback above: `approval(Goal)`, when set,
+still takes priority and decides everything, in-process only, exactly
+as before; `approval_mode` only applies when no `approval(Goal)` hook
+is configured, and — unlike `approval(Goal)` — it's a closed enum, so
+it's safe to accept directly from REST JSON (see "Security model"
+below).
 
 ### Admin UI
 
@@ -203,15 +239,19 @@ style as the `coplex_stdpy` sibling plugin's task console -- for
 driving this REST API by hand:
 
 - **New harness** form (sidebar) -- root, adapter (scripted/mock/
-  openai), model, allow_shell, allow_network, and an optional task
-  textarea; submitting creates the harness and, if a task was given,
-  immediately queues it as an async run.
+  openai), model, approval mode (none/interactive/deny_risky) and
+  timeout, allow_shell, allow_network, and an optional task textarea;
+  submitting creates the harness and, if a task was given, immediately
+  queues it as an async run.
 - **Harnesses** list (sidebar) -- every live harness with a state
-  badge (running/idle/error), message count, and creation time; click
-  a row to select it.
+  badge (running/idle/error/**N pending**), message count, and
+  creation time; click a row to select it.
 - **Tools** list (sidebar) -- the read-only catalog from `GET
   /coplex/tools`.
-- **Detail pane** for the selected harness -- summary (status,
+- **Detail pane** for the selected harness -- a **Pending approvals**
+  panel (only shown when non-empty) with one Allow/Deny row per call
+  paused by `approval_mode(interactive)`, showing the tool, risk,
+  arguments, and how long ago it was requested; a summary (status,
   iteration, message/tool-call counts), the current task, the last
   answer or error, a Run button (queues another task against the same
   harness) plus Reset/Cancel/Delete, and the full message transcript
@@ -224,13 +264,11 @@ identically whether you load it directly
 mount. It carries no authentication of its own -- same security model
 as the rest of this API (see below).
 
-**Not implemented** (unlike `coplex_stdpy`'s console): live
-approve/deny prompts for risky tool calls and durable, disk-persisted
-tasks that survive a server restart. `coplex`'s harnesses are
-in-memory only, and `approval` is intentionally not settable over REST
-at all (see the security model below) -- adding an interactive,
-REST-driven approval workflow would need new pause/resume state in
-`codex_harness.pl`'s agent loop, not just a UI change.
+**Still not ported from `coplex_stdpy`'s console**: durable,
+disk-persisted tasks that survive a server restart. `coplex`'s
+harnesses (and their pending approvals) are in-memory only -- an
+`interactive`-mode call still paused when the server process exits is
+simply gone, not resumed on the next start.
 
 The JSON status/endpoint-list document that used to live at `GET
 /coplex` itself moved to `GET /coplex/endpoints` (and bare
@@ -255,11 +293,15 @@ Each entry now also carries the endpoint that actually works:
 single shared harness that's created lazily on first use with the
 same defaults as `POST /coplex/harnesses` with an empty body
 (`root: "."`, `allow_shell`/`allow_network` both `false`,
-`approval: none`). It's for callers that just want to run one tool
-without first creating and tearing down a harness; an unknown tool
-name still comes back as a normal `200` with
+`approval: none`, `approval_mode: none`). It's for callers that just
+want to run one tool without first creating and tearing down a
+harness; an unknown tool name still comes back as a normal `200` with
 `{"ok": false, "error": {"type": "unknown_tool", ...}}`, matching
-`POST /coplex/harnesses/<id>/tools/<name>`'s behavior.
+`POST /coplex/harnesses/<id>/tools/<name>`'s behavior. Since the
+shared harness always has `approval_mode: none`, a call through this
+endpoint is never gated by the interactive-approval workflow above --
+create a harness explicitly with `approval_mode` set and call its
+`/tools/<name>` sub-route instead if you need that.
 
 
 ### Building a UI around this API
@@ -283,11 +325,12 @@ a double click.
 `GET /coplex/harnesses` returns both the original `ids` array and a
 `harnesses` array of `harness_summary/2` dicts -- `id`, `current_task`,
 `iteration`, `running`, `cancelled`, `last_answer`, `last_error`,
-`message_count`, `tool_call_count`, `created_at` -- so a dashboard can
-render a table of every live harness with one request instead of one
-per row. `GET /coplex/harnesses/<id>` still returns the full
-`harness_snapshot/2` (same fields plus the complete `messages` and
-`tool_activity` history) for a detail view.
+`message_count`, `tool_call_count`, `pending_approval_count`,
+`created_at` -- so a dashboard can render a table of every live
+harness with one request instead of one per row. `GET
+/coplex/harnesses/<id>` still returns the full `harness_snapshot/2`
+(same fields plus the complete `messages`, `tool_activity`, and
+`pending_approvals` history) for a detail view.
 
 CORS (`Access-Control-Allow-Origin`) is enabled by default for any
 origin, including the `OPTIONS` preflight every browser sends before a
@@ -317,7 +360,12 @@ callable term:
   **never** settable over REST, because `codex_harness.pl` eventually
   `call/N`'s each of them -- accepting them from untrusted JSON would
   be a remote-code-execution vector. Set them only via a direct,
-  in-process `harness_new/2` call.
+  in-process `harness_new/2` call. `approval_mode` (`none`/
+  `interactive`/`deny_risky`) and `approval_timeout` *are*
+  REST-settable -- unlike `approval(Goal)`, `approval_mode` normalizes
+  to one of a fixed set of atoms (anything unrecognised falls back to
+  `none`, the same pattern `adapter` uses above) and is never
+  `call/N`'d, so it carries none of the same risk.
 - Tool names on `POST /coplex/harnesses/<id>/tools/<name>` (and the
   harness-less `POST /coplex/tools/<name>`) are only ever unified
   against `dispatch_tool/5`'s fixed clause table (see

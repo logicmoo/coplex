@@ -639,4 +639,157 @@ test(openai_json_schema_of_params) :-
     assertion(Schema.properties.ok.type == "boolean"),
     assertion(Schema.properties.args.type == "array").
 
+% -- interactive approval workflow ------------------------------------
+%
+% approval_mode(interactive) makes a risky tool call block (in its own
+% thread -- harness_tool/4 is synchronous from the caller's point of
+% view) until harness_decide_approval/3 resolves it from elsewhere, so
+% these tests always drive the blocked call from a background thread
+% and resolve it from the main test thread, polling harness_snapshot/2
+% for the pending_approvals entry the way a real REST client would.
+
+wait_for_pending(_, 0, _) :- !, fail.
+wait_for_pending(H, N, CallId) :-
+    harness_snapshot(H, Snap),
+    get_dict(pending_approvals, Snap, Pending),
+    (   Pending = [First|_]
+    ->  get_dict(call_id, First, CallId)
+    ;   sleep(0.05),
+        N1 is N - 1,
+        wait_for_pending(H, N1, CallId)
+    ).
+
+test(approval_interactive_allow) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), approval_mode(interactive), approval_timeout(10)],
+               interactive_allow),
+        cleanup_repo(Dir)).
+
+interactive_allow(H) :-
+    thread_create(harness_tool(H, write_file, _{path:"a.txt", content:"hi"}, _), Tid, []),
+    wait_for_pending(H, 100, CallId),
+    harness_decide_approval(H, CallId, allow),
+    thread_join(Tid, _),
+    harness_tool(H, read_file, _{path:"a.txt"}, R),
+    assertion(get_dict(ok, R, true)),
+    assertion(get_dict(content, R, "hi")).
+
+test(approval_interactive_deny) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), approval_mode(interactive), approval_timeout(10)],
+               interactive_deny),
+        cleanup_repo(Dir)).
+
+interactive_deny(H) :-
+    thread_create(harness_tool(H, write_file, _{path:"b.txt", content:"hi"}, _), Tid, []),
+    wait_for_pending(H, 100, CallId),
+    harness_decide_approval(H, CallId, deny),
+    thread_join(Tid, _),
+    harness_tool(H, read_file, _{path:"b.txt"}, R),
+    assertion(get_dict(ok, R, false)),
+    get_dict(error, R, Error),
+    assertion(get_dict(type, Error, not_found)).
+
+test(approval_read_only_bypasses_gating) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), approval_mode(interactive), approval_timeout(10)],
+               read_only_bypass),
+        cleanup_repo(Dir)).
+
+read_only_bypass(H) :-
+    % git_status is read_only risk -- must run immediately, never
+    % appearing in pending_approvals, regardless of approval_mode.
+    harness_tool(H, git_status, _{}, R),
+    assertion(get_dict(ok, R, true)),
+    harness_snapshot(H, Snap),
+    assertion(get_dict(pending_approvals, Snap, [])).
+
+test(approval_deny_risky_denies_without_pause) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), approval_mode(deny_risky)], deny_risky_fast),
+        cleanup_repo(Dir)).
+
+deny_risky_fast(H) :-
+    get_time(T0),
+    harness_tool(H, write_file, _{path:"c.txt", content:"hi"}, R),
+    get_time(T1),
+    assertion(get_dict(ok, R, false)),
+    get_dict(error, R, Error),
+    assertion(get_dict(type, Error, denied)),
+    assertion((T1 - T0) < 1.0).
+
+test(approval_timeout_auto_denies) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), approval_mode(interactive), approval_timeout(1)],
+               timeout_auto_deny),
+        cleanup_repo(Dir)).
+
+timeout_auto_deny(H) :-
+    get_time(T0),
+    harness_tool(H, write_file, _{path:"d.txt", content:"hi"}, R),
+    get_time(T1),
+    assertion(get_dict(ok, R, false)),
+    get_dict(error, R, Error),
+    assertion(get_dict(type, Error, denied)),
+    assertion(sub_string(Error.message, _, _, _, "timed out")),
+    assertion((T1 - T0) >= 0.9).
+
+test(approval_visible_in_snapshot_and_summary) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir), approval_mode(interactive), approval_timeout(10)],
+               visible_pending),
+        cleanup_repo(Dir)).
+
+visible_pending(H) :-
+    thread_create(harness_tool(H, write_file, _{path:"f.txt", content:"hi"}, _), Tid, []),
+    wait_for_pending(H, 100, CallId),
+    harness_snapshot(H, Snap),
+    get_dict(pending_approvals, Snap, [Pending|_]),
+    assertion(get_dict(call_id, Pending, CallId)),
+    assertion(get_dict(tool, Pending, write_file)),
+    assertion(get_dict(risk, Pending, write)),
+    harness_summary(H, Summary),
+    assertion(get_dict(pending_approval_count, Summary, 1)),
+    harness_decide_approval(H, CallId, deny),
+    thread_join(Tid, _).
+
+test(approval_harness_close_denies_pending) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_close_h(Dir),
+        cleanup_repo(Dir)).
+
+with_close_h(Dir) :-
+    harness_new([root(Dir), approval_mode(interactive), approval_timeout(30)], H),
+    thread_create(harness_tool(H, write_file, _{path:"g.txt", content:"hi"}, _), Tid, []),
+    wait_for_pending(H, 100, _CallId),
+    get_time(T0),
+    harness_close(H),
+    get_time(T1),
+    assertion((T1 - T0) < 2.0),
+    thread_join(Tid, _).
+
+test(approval_unknown_call_id_errors, [error(existence_error(pending_approval, "does-not-exist"), _)]) :-
+    tmp_repo(Dir),
+    setup_call_cleanup(
+        true,
+        with_h([root(Dir)], unknown_call_id),
+        cleanup_repo(Dir)).
+
+unknown_call_id(H) :-
+    harness_decide_approval(H, "does-not-exist", allow).
+
 :- end_tests(codex_harness).

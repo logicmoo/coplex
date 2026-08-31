@@ -70,7 +70,7 @@ in-process and, safely, over the REST API:
 ```
 
 ```http
-POST /harnesses
+POST /coplex/harnesses
 {"root": ".", "adapter": "openai", "allow_network": true,
  "adapter_api_key": "sk-...", "model": "gpt-4o-mini"}
 ```

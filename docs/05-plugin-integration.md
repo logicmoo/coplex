@@ -52,7 +52,7 @@ sequenceDiagram
 | `workbenchStartupAfter` | `workbench_startup_after()` | Returns `status()` so the host can immediately show plugin health. |
 | `workbenchShutdown` | `workbench_shutdown()` | Stops that shared server. |
 | `workbenchShutdownAfter` | `workbench_shutdown_after()` | `{ok:true}`. |
-| `workspaceStartup` / `...After` | no-ops | Harness instances are created on demand per caller via `POST /harnesses`, not one per workspace — there's nothing workspace-scoped to start. |
+| `workspaceStartup` / `...After` | no-ops | Harness instances are created on demand per caller via `POST /coplex/harnesses`, not one per workspace — there's nothing workspace-scoped to start. |
 | `workspaceShutdown` / `...After` | no-ops | Same reasoning. |
 
 Every hook function returns a small JSON-able dict with at least an

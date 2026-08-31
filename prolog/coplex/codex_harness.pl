@@ -13,6 +13,7 @@
             harness_tool/4,
             harness_tool_specs/1,
             harness_list/1,
+            harness_decide_approval/3,
             scripted_adapter/3,
             http_json_adapter/3,
             openai_chat_adapter/3
@@ -155,6 +156,9 @@ harness_new(Options, codex_harness(Id)) :-
     option(subagent_limit(SubLim), Options, 4),
     option(subagent_allow_writes(SubW), Options, false),
     option(approval(Approval), Options, none),
+    option(approval_mode(ApprovalMode0), Options, none),
+    normalize_approval_mode(ApprovalMode0, ApprovalMode),
+    option(approval_timeout(ApprovalTO), Options, 300),
     option(on_event(OnEvent), Options, none),
     option(transcript(Transcript), Options, none),
     option(secrets(Secrets0), Options, []),
@@ -190,6 +194,8 @@ harness_new(Options, codex_harness(Id)) :-
         subagent_limit:SubLim,
         subagent_allow_writes:SubW,
         approval:Approval, on_event:OnEvent,
+        approval_mode:ApprovalMode,
+        approval_timeout:ApprovalTO,
         transcript:Transcript, secrets:Secrets,
         default_test_command:TestCmd,
         web_search_backend:SearchB,
@@ -206,6 +212,23 @@ harness_new(Options, codex_harness(Id)) :-
     State1 = State.put(created_at, Now),
     assertz(harness_rec(Id, Mutex, State1)),
     debug(codex_harness, 'created ~w root=~w', [Id, Root]).
+
+%!  normalize_approval_mode(+Raw, -Mode) is det.
+%
+%   Mode is always one of a fixed, closed set of atoms -- `none`
+%   (default: no interactive gating; today's behaviour), `interactive`
+%   (any tool call whose risk isn't `read_only` pauses -- see
+%   wait_for_approval/6 -- until a REST decision or approval_timeout/1
+%   arrives), or `deny_risky` (same risky-tool trigger, but denied
+%   immediately with no pause -- for unattended REST automation that
+%   still wants read-only-safe behaviour without a human present).
+%   Anything else -- including a string from JSON -- normalizes to
+%   `none`, mirroring how sanitize_value/3 treats `adapter` in
+%   coplex_server.pl: never pass an arbitrary value through unchecked.
+normalize_approval_mode(M, M) :- memberchk(M, [none, interactive, deny_risky]), !.
+normalize_approval_mode("interactive", interactive) :- !.
+normalize_approval_mode("deny_risky", deny_risky) :- !.
+normalize_approval_mode(_, none).
 
 %!  default_model_for_adapter(+Adapter, -Model) is det.
 %   `scripted`/`mock` never look at `model` at all, so `default` stays
@@ -243,7 +266,8 @@ harness_list(Ids) :-
 harness_close(codex_harness(Id)) :-
     !,
     (   harness_rec(Id, Mutex, _)
-    ->  with_mutex(Mutex,
+    ->  deny_all_pending_approvals(Id),
+        with_mutex(Mutex,
                    (   retractall(harness_rec(Id, _, _)),
                        catch(mutex_destroy(Mutex), _, true)))
     ;   true
@@ -268,6 +292,7 @@ harness_messages(codex_harness(Id), Messages) :-
 %   UI/admin observation surface.  Independent of any HTTP server.
 harness_snapshot(codex_harness(Id), Snap) :-
     state(Id, S),
+    pending_approvals_for(Id, PendingApprovals),
     Snap = _{
         id:S.id,
         current_task:S.current_task,
@@ -279,6 +304,7 @@ harness_snapshot(codex_harness(Id), Snap) :-
         subagents:S.subagents,
         last_answer:S.last_answer,
         last_error:S.last_error,
+        pending_approvals:PendingApprovals,
         created_at:S.created_at
     }.
 
@@ -288,11 +314,15 @@ harness_snapshot(codex_harness(Id), Snap) :-
 %   (e.g. a web UI rendering a table of running agents): unlike
 %   harness_snapshot/2 it carries message/tool-activity *counts*
 %   rather than the full histories, so listing many harnesses stays
-%   cheap.
+%   cheap. `pending_approval_count` is enough for a list view's badge;
+%   a detail view fetches the full `pending_approvals` array (with
+%   each call's tool/risk/arguments) from harness_snapshot/2 instead.
 harness_summary(codex_harness(Id), Summary) :-
     state(Id, S),
     length(S.messages, MessageCount),
     length(S.tool_activity, ToolCallCount),
+    pending_approvals_for(Id, PendingApprovals),
+    length(PendingApprovals, PendingApprovalCount),
     Summary = _{
         id:S.id,
         current_task:S.current_task,
@@ -303,6 +333,7 @@ harness_summary(codex_harness(Id), Summary) :-
         last_error:S.last_error,
         message_count:MessageCount,
         tool_call_count:ToolCallCount,
+        pending_approval_count:PendingApprovalCount,
         created_at:S.created_at
     }.
 
@@ -436,34 +467,63 @@ run_one_tool(Id, Call, Result) :-
 run_named_tool(Id, Name, Args, CallId, Result) :-
     get_time(T0),
     emit(Id, _{type:tool_start, tool:Name, arguments:Args, id:CallId}),
-    (   catch(guarded_tool(Id, Name, Args, Raw), E, tool_exception(Name, E, Raw))
+    % A direct/harness_tool call (see harness_tool/4) always arrives
+    % with CallId == "" -- fine for the result's tool_call_id field,
+    % but approval_mode(interactive)'s pending-approval registry (see
+    % wait_for_approval/6) is keyed by this id, so two concurrent
+    % direct calls on the same harness would collide on "" and each
+    % could resolve the other's approval. ApprovalKey is always
+    % genuinely unique; CallId (below, in tool_call_id) is left
+    % exactly as the caller passed it, unchanged. uuid/1 returns an
+    % atom, but every model-driven call_id (normalize_call/2, via
+    % text_of/2) is a string -- ApprovalKey is normalized to a string
+    % too so a REST caller can round-trip *either* kind of call_id
+    % (read from pending_approvals, posted back to .../approvals/<id>)
+    % through plain unification without an atom/string mismatch
+    % silently making harness_decide_approval/3 claim it doesn't exist.
+    (   CallId == "" -> uuid(ApprovalKey0), atom_string(ApprovalKey0, ApprovalKey) ; ApprovalKey = CallId ),
+    (   catch(guarded_tool(Id, Name, Args, ApprovalKey, Raw), E, tool_exception(Name, E, Raw))
     ->  true
     ;   Raw = _{ok:false, tool:Name, error:_{type:failed, message:"tool failed"}}
     ),
     get_time(T1),
     Dur is round((T1-T0)*1000),
     Result0 = Raw.put(_{tool:Name, duration_ms:Dur, tool_call_id:CallId}),
-    redact_result(Id, Result0, Result),
-    mutate(Id, record_tool(Result)),
-    emit(Id, _{type:tool_finish, result:Result}).
+    % An approval_mode(interactive) wait can run for minutes (up to
+    % approval_timeout/1), which is long enough for harness_close/1 to
+    % have deleted Id out from under this thread in the meantime (it
+    % denies every pending approval first, but that's a fire-and-
+    % forget thread_send_message/2 -- see deny_all_pending_approvals/1
+    % -- not a synchronous handoff). Ordinary tool calls have always
+    % had a narrow version of this same race; catch/3 here turns
+    % "harness vanished mid-call" into a best-effort result instead of
+    % an uncaught existence_error crashing this call's thread.
+    (   catch((redact_result(Id, Result0, Result1),
+               mutate(Id, record_tool(Result1)),
+               emit(Id, _{type:tool_finish, result:Result1})),
+              error(existence_error(codex_harness, Id), _),
+              fail)
+    ->  Result = Result1
+    ;   Result = Result0.put(_{note:"harness was deleted before this result could be recorded"})
+    ).
 
 tool_exception(Name, Error, _{ok:false, tool:Name,
                               error:_{type:exception, message:Msg}}) :-
     term_string(Error, Msg).
 
-guarded_tool(Id, Name, Args, Result) :-
+guarded_tool(Id, Name, Args, CallId, Result) :-
     state(Id, S),
     check_cancelled(S),
     (   allowed_tool_name(S, Name)
-    ->  known_or_dispatch(S, Name, Args, Result)
+    ->  known_or_dispatch(S, Name, Args, CallId, Result)
     ;   Result = _{ok:false, tool:Name,
                    error:_{type:permission_error, message:"Tool not permitted in this harness"}}
     ).
 
-known_or_dispatch(S, Name, Args, Result) :-
+known_or_dispatch(S, Name, Args, CallId, Result) :-
     harness_tool_specs(Specs),
     (   memberchk(spec(Name, Risk, _, _), Specs)
-    ->  decide_tool(S, Name, Risk, Args, Result)
+    ->  decide_tool(S, Name, Risk, Args, CallId, Result)
     ;   Result = _{ok:false, tool:Name,
                    error:_{type:unknown_tool, message:"Unknown tool"}}
     ).
@@ -474,14 +534,41 @@ allowed_tool_name(S, Name) :-
     is_list(S.allowed_tools),
     memberchk(Name, S.allowed_tools).
 
-approve(S, _Name, _Args, allow) :-
-    S.approval == none, !.
-approve(S, Name, Args, Decision) :-
+%!  approve(+S, +Name, +Args, +Risk, +CallId, -Decision) is det.
+%
+%   Decision is `allow`, `deny(Why)`, or bare `deny`. Two independent
+%   gates, checked in this order:
+%
+%     1. The existing in-process-only `approval(Goal)` callback (never
+%        settable over REST -- see coplex_server.pl's
+%        safe_option_key/1). If configured, it alone decides, for
+%        every tool regardless of risk, exactly as before this
+%        predicate grew a Risk/CallId argument.
+%     2. `approval_mode/1` -- a closed, REST-safe enum (see
+%        normalize_approval_mode/2) that only ever gates non-
+%        `read_only` tools: `deny_risky` denies immediately, and
+%        `interactive` pauses the calling thread in
+%        wait_for_approval/6 until a REST decision (or
+%        approval_timeout/1) arrives. `none` (the default) allows
+%        everything, identical to today's behaviour with no approval
+%        configured at all.
+approve(S, _Name, _Args, _Risk, _CallId, allow) :-
+    S.approval == none, S.approval_mode == none, !.
+approve(S, Name, Args, _Risk, _CallId, Decision) :-
+    S.approval \== none, !,
     Approval = S.approval,
     call(Approval, Name, Args, Decision).
+approve(_, _, _, read_only, _CallId, allow) :- !.
+approve(S, _, _, _Risk, _CallId, deny("Denied: approval_mode(deny_risky)")) :-
+    S.approval_mode == deny_risky, !.
+approve(S, Name, Args, Risk, CallId, Decision) :-
+    S.approval_mode == interactive, !,
+    wait_for_approval(S, Name, Args, Risk, CallId, Decision).
+approve(_, Name, _, _, _, deny("Denied: no approval decision available")) :-
+    debug(codex_harness, 'approve/6 fell through for tool ~w -- this should be unreachable', [Name]).
 
-decide_tool(S, Name, Risk, Args, Result) :-
-    approve(S, Name, Args, Decision),
+decide_tool(S, Name, Risk, Args, CallId, Result) :-
+    approve(S, Name, Args, Risk, CallId, Decision),
     (   Decision == allow
     ->  dispatch_tool(Name, Risk, S, Args, Result)
     ;   Decision = deny(Why)
@@ -490,6 +577,140 @@ decide_tool(S, Name, Risk, Args, Result) :-
     ;   Result = _{ok:false, tool:Name,
                    error:_{type:denied, message:"approval denied"}}
     ).
+
+/* ---------------- interactive approval (approval_mode(interactive)) ---------------- */
+
+%   pending_approval_rec(HarnessId, CallId, approval(Queue, Info)) --
+%   one fact per tool call currently paused in wait_for_approval/6.
+%   Guarded by a single global mutex rather than per-harness: creating
+%   and resolving an approval is rare and short, so the extra
+%   contention this could in theory cause is not worth the complexity
+%   of per-harness approval mutexes on top of the per-harness state
+%   mutex harness_rec/3 already has.
+:- dynamic pending_approval_rec/3.
+
+%!  wait_for_approval(+S, +Name, +Args, +Risk, +CallId, -Decision) is det.
+%
+%   Registers a pending approval, emits an `approval_requested` event
+%   (so a UI polling harness_messages/2/harness_snapshot/2 -- see
+%   pending_approvals_for/2 -- learns about it immediately), then
+%   polls (poll_approval/4) for either a REST-delivered decision (see
+%   harness_decide_approval/3), the harness being cancelled, or
+%   approval_timeout/1 elapsing -- whichever comes first. Always
+%   cleans up the registry entry and its message queue before
+%   returning, even on a timeout, so nothing leaks.
+wait_for_approval(S, Name, Args, Risk, CallId, Decision) :-
+    Id = S.id,
+    message_queue_create(Queue),
+    register_pending_approval(Id, CallId, Queue, Name, Risk, Args),
+    emit(Id, _{type:approval_requested, tool:Name, risk:Risk, id:CallId, arguments:Args}),
+    Timeout = S.approval_timeout,
+    get_time(Now),
+    Deadline is Now + Timeout,
+    poll_approval(Id, Queue, Deadline, Decision0),
+    unregister_pending_approval(Id, CallId),
+    catch(message_queue_destroy(Queue), _, true),
+    % harness_close/1 may have deleted Id while this thread was
+    % blocked (it resolves every pending approval as denied first --
+    % see deny_all_pending_approvals/1 -- but that's a fire-and-forget
+    % thread_send_message/2, so this thread can still wake up after
+    % the harness record is already gone); emit/2 would otherwise
+    % throw existence_error(codex_harness, Id) via state/2, which
+    % would abort this whole tool call's thread instead of just
+    % finishing with the decision it already has.
+    catch(emit(Id, _{type:approval_resolved, id:CallId, decision:Decision0}), _, true),
+    normalize_decision(Decision0, Decision).
+
+%!  poll_approval(+Id, +Queue, +Deadline, -Decision) is det.
+%
+%   Short-interval polling rather than one indefinite
+%   thread_get_message/2 wait, so a harness_cancel/1 during the wait
+%   is noticed promptly (within POLL_INTERVAL) instead of only at
+%   Deadline -- this thread is the one running the whole agent loop,
+%   so cancellation must actually be able to interrupt it here.
+poll_approval(Id, Queue, Deadline, Decision) :-
+    get_time(Now),
+    (   Now >= Deadline
+    ->  Decision = deny("Approval request timed out")
+    ;   catch(state(Id, S), _, fail), S.cancelled == true
+    ->  Decision = deny("Harness cancelled while awaiting approval")
+    ;   catch(thread_get_message(Queue, Msg, [timeout(0.25)]), _, fail)
+    ->  Decision = Msg
+    ;   poll_approval(Id, Queue, Deadline, Decision)
+    ).
+
+normalize_decision(allow, allow) :- !.
+normalize_decision(deny, deny(_)) :- !.
+normalize_decision(deny(Why), deny(Why)) :- !.
+normalize_decision(_, deny("Invalid decision")).
+
+register_pending_approval(Id, CallId, Queue, Name, Risk, Args) :-
+    get_time(Now),
+    Info = _{tool:Name, risk:Risk, arguments:Args, requested_at:Now},
+    with_mutex(coplex_pending_approvals,
+               assertz(pending_approval_rec(Id, CallId, approval(Queue, Info)))).
+
+unregister_pending_approval(Id, CallId) :-
+    with_mutex(coplex_pending_approvals,
+               retractall(pending_approval_rec(Id, CallId, _))).
+
+%!  pending_approvals_for(+Id, -List) is det.
+%   List of `_{call_id, tool, risk, arguments, requested_at}` dicts
+%   for every tool call currently paused for this harness -- surfaced
+%   through harness_snapshot/2's `pending_approvals` field so a UI can
+%   render Allow/Deny controls without a dedicated poll endpoint.
+%   The dict is built *inside* the findall/3 goal, not its template --
+%   SWI's dict dot-notation (`Info.tool`) expands into extra goals at
+%   the point it's written, and a findall/3 *template* argument is
+%   only ever unified against each solution after the fact, never
+%   itself re-executed as a goal per solution. Writing the `.tool`
+%   access directly in the template would expand to a get_dict/3 call
+%   sequenced *before* findall/3 even starts (when Info is still
+%   unbound), throwing instantiation_error -- easy to miss because it
+%   only manifests once there's at least an attempt to read a field,
+%   not at load time.
+pending_approvals_for(Id, List) :-
+    with_mutex(coplex_pending_approvals,
+               findall(Record,
+                       ( pending_approval_rec(Id, CallId, approval(_, Info)),
+                         Record = _{call_id:CallId, tool:Info.tool, risk:Info.risk,
+                                    arguments:Info.arguments, requested_at:Info.requested_at}
+                       ),
+                       List)).
+
+%!  harness_decide_approval(+Harness, +CallId, +Decision) is det.
+%
+%   Decision is the atom `allow` or `deny`. Resolves the matching
+%   pending approval (see wait_for_approval/6), waking its blocked
+%   thread immediately -- no polling delay on this side, since
+%   thread_send_message/2 to a queue a receiver is already waiting on
+%   is immediate. Throws existence_error(pending_approval, CallId) if
+%   CallId names no currently-pending approval for this harness (it
+%   may have already resolved, timed out, or the harness may have been
+%   cancelled/deleted), which coplex_server.pl maps to HTTP 404.
+%   CallId is normalized to a string before matching (every stored
+%   call_id is a string -- see run_named_tool/5 and normalize_call/2 --
+%   but a caller working directly in Prolog may reasonably pass an
+%   atom; REST callers always supply a string via a URL path segment).
+harness_decide_approval(codex_harness(Id), CallId0, Decision) :-
+    must_be(oneof([allow, deny]), Decision),
+    text_of(CallId0, CallId),
+    with_mutex(coplex_pending_approvals,
+               (   pending_approval_rec(Id, CallId, approval(Queue, _))
+               ->  thread_send_message(Queue, Decision)
+               ;   throw(error(existence_error(pending_approval, CallId), _))
+               )).
+
+%!  deny_all_pending_approvals(+Id) is det.
+%   Called from harness_close/1 so a harness being deleted never
+%   leaves a thread permanently blocked in wait_for_approval/6 waiting
+%   on a call_id nobody can ever address again -- each pending
+%   approval for Id is resolved as denied, same as if a human had
+%   explicitly said no.
+deny_all_pending_approvals(Id) :-
+    with_mutex(coplex_pending_approvals,
+               forall(pending_approval_rec(Id, _CallId, approval(Queue, _)),
+                      catch(thread_send_message(Queue, deny("Harness closed")), _, true))).
 
 dispatch_tool(read_file, _, S, A, R)        :- tool_read_file(S, A, R).
 dispatch_tool(write_file, write, S, A, R)   :- tool_write_file(S, A, R).

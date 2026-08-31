@@ -106,43 +106,66 @@ is now exposed over HTTP:
   serves a small, self-contained HTML console (`admin_ui_handler/1`
   + the `admin_ui_html/1` constant, both in `coplex_server.pl`) — a
   two-pane dark-themed layout (sidebar: create-harness form, harness
-  list, tool catalog; detail pane: selected harness's summary/task/
-  answer/messages), styled after the `coplex_stdpy` sibling plugin's
-  task console for a consistent look across the workbench's agent-
-  harness plugins. Create/run/cancel/reset/inspect/delete harnesses,
-  all via plain `fetch()` calls against the JSON endpoints above
-  through absolute `/coplex/...` paths (so it works the same loaded
-  directly or through the workbench's proxy). No external CSS/JS, no
-  build step. This *is* the "new UI" the bullet below originally asked
-  for kept out of the core module -- it lives in `coplex_server.pl`,
-  the file already responsible for every UI/network-facing concern,
-  not in `codex_harness.pl`. The JSON status/endpoint-list document
-  that used to live at `GET /coplex` moved to `GET /coplex/endpoints`
-  (`coplex_endpoints_handler/1`, the renamed former
+  list, tool catalog; detail pane: pending-approvals panel, selected
+  harness's summary/task/answer/messages), styled after the
+  `coplex_stdpy` sibling plugin's task console for a consistent look
+  across the workbench's agent-harness plugins. Create/run/cancel/
+  reset/inspect/delete harnesses, all via plain `fetch()` calls against
+  the JSON endpoints above through absolute `/coplex/...` paths (so it
+  works the same loaded directly or through the workbench's proxy). No
+  external CSS/JS, no build step. This *is* the "new UI" the bullet
+  below originally asked for kept out of the core module -- it lives in
+  `coplex_server.pl`, the file already responsible for every UI/network-
+  facing concern, not in `codex_harness.pl`. The JSON status/endpoint-
+  list document that used to live at `GET /coplex` moved to `GET
+  /coplex/endpoints` (`coplex_endpoints_handler/1`, the renamed former
   `coplex_status_handler/1`) to make room for it.
-  **Not ported from `coplex_stdpy`'s console**: live approve/deny
-  prompts for risky tool calls, and durable disk-persisted tasks that
-  survive a restart. `coplex_stdpy`'s `HarnessTaskManager` (see its
-  `runtime.py`) blocks a running task's thread mid-tool-dispatch on a
-  pending-approval/pending-input registry until a later, unrelated
-  REST call resolves it, and persists every task as JSON + a JSONL
-  event log under a state directory. Bringing genuine parity here
-  would mean: (1) a new pause/resume mechanism in
-  `codex_harness.pl`'s `decide_tool/5` path -- distinct from, and
-  layered on top of, the existing in-process-only `approval(Goal)`
-  option, since only a closed-vocabulary "allow"/"deny" decision would
-  ever be safe to accept from REST (see `sanitize_value/3`'s handling
-  of `adapter` for the established pattern of normalizing untrusted
-  JSON to one of a few fixed atoms); (2) new REST endpoints
-  (`POST /coplex/harnesses/<id>/approvals/<call_id>`,
-  `POST /coplex/harnesses/<id>/input`) with a timeout so a decision
-  that never arrives can't deadlock a run; (3) persisting
+  **Interactive tool-call approvals — DONE** (this used to be the
+  first item in "not ported from `coplex_stdpy`'s console" below):
+  `approval_mode(interactive)` (also settable over REST as
+  `{"approval_mode": "interactive"}`) pauses any non-`read_only`-risk
+  tool call in `wait_for_approval/6`, which registers a
+  `pending_approval_rec/3` fact (mutex `coplex_pending_approvals`),
+  emits an `approval_requested` event, and polls every 0.25s for
+  either: a decision via the new `harness_decide_approval/3` (wired to
+  `POST /coplex/harnesses/<id>/approvals/<call_id>`, body
+  `{"decision": "allow"|"deny"}`, 404 for an unknown/already-resolved
+  `call_id`), `approval_timeout` seconds elapsing (auto-deny, default
+  300), or the harness being cancelled/closed (`deny_all_pending_
+  approvals/1`, called from `harness_close/1`, denies every pending
+  approval for that harness before its state is retracted). Pending
+  approvals surface through `harness_snapshot/2`'s `pending_approvals`
+  list and `harness_summary/2`'s `pending_approval_count`, and the
+  admin UI renders one Allow/Deny row per pending call. `approval_mode`
+  is a *second*, independent gate alongside the pre-existing in-process
+  `approval(Goal)` callback (unchanged, still never REST-settable,
+  still takes priority when set) -- `deny_risky` is the same
+  non-`read_only` trigger but denies immediately with no pause, for
+  unattended REST automation. Two subtleties worth knowing if you touch
+  this code: (1) SWI dict dot-notation (`Info.tool`) does *not*
+  goal-expand correctly inside a `findall/3` *template* argument --
+  see `pending_approvals_for/2`'s comment for the fix (build the dict
+  inside the findall *goal*, not the template); (2) the auto-generated
+  per-call approval key must be a string, not an atom (`uuid/1`'s
+  default), because every model-driven `call_id` is already a string
+  (`normalize_call/2` via `text_of/2`) and a REST caller always POSTs a
+  string (a URL path segment) back -- an atom/string mismatch would
+  make `harness_decide_approval/3` claim a perfectly valid, currently-
+  pending `call_id` doesn't exist.
+  **Still not ported from `coplex_stdpy`'s console**: durable
+  disk-persisted tasks that survive a restart, and the separate
+  human-input-request mechanism (`coplex_stdpy`'s `provide_input`/
+  `POST /tasks/<id>/input`) -- `coplex` has no equivalent of a task
+  pausing to *ask the model's caller a question* mid-run, only tool-
+  call approval. `coplex_stdpy`'s `HarnessTaskManager` (see its
+  `runtime.py`) persists every task as JSON + a JSONL event log under a
+  state directory and rehydrates it on startup; `coplex`'s harnesses
+  (and their pending approvals) remain purely in-memory and vanish on
+  restart. Bringing that part of parity would mean persisting
   `harness_rec/3` state (and an incrementally-appended event log) to
-  disk and rehydrating it on `workbench_startup/0`, since harnesses
-  today are purely in-memory and vanish on restart. This is real new
+  disk and rehydrating it on `workbench_startup/0` -- real new
   engineering on the core agent loop, not a UI-only change -- treat it
-  as a separate, deliberately-scoped feature, not something to bundle
-  into a UI pass.
+  as a separate, deliberately-scoped feature.
 - A remaining idea, not yet done: a CLI/REPL loop calling
   `harness_run/3` directly in-process for local scripting (as opposed
   to the REST API) — still worth adding if useful, but the REST layer
@@ -254,6 +277,44 @@ hunks only. If git binary patches or rename headers are needed:
   `setup_call_cleanup/3` combined with disjunction) to avoid plunit's
   "succeeded with choicepoint" warnings; see `with_h/2` in
   `test_codex_harness.pl`.
+- **SWI dict dot-notation does not goal-expand inside a `findall/3`
+  *template* argument.** Writing
+  `findall(_{k:Dict.field}, Goal, List)` throws `instantiation_error`
+  even when `Goal` has solutions, because `Dict.field` expands into an
+  extra `get_dict/3` goal sequenced *before* `findall/3` starts (when
+  `Dict` is still unbound) rather than once per solution. Fix: build
+  the dict inside the *goal* (second argument), where the generator
+  has already bound the dict earlier in the same conjunction --
+  `findall(Record, (Goal, Record = _{k:Dict.field}), List)` -- see
+  `pending_approvals_for/2`. The same eager-evaluation trap applies to
+  *any* goal-term built as data and meta-called later (`catch/3`,
+  `forall/2`, `thread_create/3`, a test helper like `check(Label,
+  Goal)`): dict dot-notation only expands correctly if the enclosing
+  predicate declares that argument a goal position, e.g.
+  `:- meta_predicate check(?, 0).` -- without it, prefer explicit
+  `get_dict/3` in those deferred goals instead of `.` syntax.
+- **`assertion/1` (library(debug)) discards variable bindings made by
+  its argument.** `assertion(get_dict(k, Dict, V)), assertion(V ==
+  something)` fails on the second call with `V` unbound again -- any
+  binding a later line needs must come from a plain (non-`assertion`-
+  wrapped) call; only wrap the final, self-contained check in
+  `assertion/1`.
+- **A JSON round-trip through `json_read_dict/2` always decodes string
+  values as Prolog strings, never atoms** -- even when the original
+  server-side dict used an atom (`_{type:denied}`). REST tests must
+  compare against `"denied"`, not `denied`; see
+  `test_codex_harness_server.pl`'s `Reply.error.type == "unknown_tool"`
+  -style assertions.
+- **An auto-generated id used as a lookup key must match the type
+  every other producer of that same key uses.** `uuid/1` defaults to
+  an atom, but every model-driven `call_id` in this codebase is a
+  string (`normalize_call/2`, via `text_of/2`), and a REST caller
+  always supplies a string (a URL path segment via `split_string/4`).
+  Registering the auto-generated approval key as an atom would make
+  `harness_decide_approval/3`'s plain unification silently never match
+  a REST-supplied `call_id` for the *same* logical call -- normalize to
+  a string at the point of generation (`atom_string/2`) rather than
+  trying to make every consumer type-tolerant.
 
 ## Suggested order of work
 
