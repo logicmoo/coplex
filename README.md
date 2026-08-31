@@ -197,15 +197,40 @@ return HTTP 500 with `{"ok": false, "error": "..."}`.
 ### Admin UI
 
 `GET /coplex` (also bare `GET /`) serves a small, self-contained HTML
-dashboard -- no external CSS/JS, no build step, no CDN dependency --
-for driving this REST API by hand: browse the tool catalog, create a
-harness (root/adapter/model/allow_shell/allow_network), run/cancel/
-reset it, inspect its message transcript, and delete it. Everything it
-does is a plain `fetch()` against the JSON endpoints in the table
-above through absolute `/coplex/...` paths, so it works identically
-whether you load it directly (`http://localhost:8840/coplex`) or
-through the workbench's proxy mount. It carries no authentication of
-its own -- same security model as the rest of this API (see below).
+console -- no external CSS/JS, no build step, no CDN dependency, a
+two-pane dark-themed layout (sidebar list + detail pane) in the same
+style as the `coplex_stdpy` sibling plugin's task console -- for
+driving this REST API by hand:
+
+- **New harness** form (sidebar) -- root, adapter (scripted/mock/
+  openai), model, allow_shell, allow_network, and an optional task
+  textarea; submitting creates the harness and, if a task was given,
+  immediately queues it as an async run.
+- **Harnesses** list (sidebar) -- every live harness with a state
+  badge (running/idle/error), message count, and creation time; click
+  a row to select it.
+- **Tools** list (sidebar) -- the read-only catalog from `GET
+  /coplex/tools`.
+- **Detail pane** for the selected harness -- summary (status,
+  iteration, message/tool-call counts), the current task, the last
+  answer or error, a Run button (queues another task against the same
+  harness) plus Reset/Cancel/Delete, and the full message transcript
+  rendered as an ordered log.
+
+Everything it does is a plain `fetch()` against the JSON endpoints in
+the table above through absolute `/coplex/...` paths, so it works
+identically whether you load it directly
+(`http://localhost:8840/coplex`) or through the workbench's proxy
+mount. It carries no authentication of its own -- same security model
+as the rest of this API (see below).
+
+**Not implemented** (unlike `coplex_stdpy`'s console): live
+approve/deny prompts for risky tool calls and durable, disk-persisted
+tasks that survive a server restart. `coplex`'s harnesses are
+in-memory only, and `approval` is intentionally not settable over REST
+at all (see the security model below) -- adding an interactive,
+REST-driven approval workflow would need new pause/resume state in
+`codex_harness.pl`'s agent loop, not just a UI change.
 
 The JSON status/endpoint-list document that used to live at `GET
 /coplex` itself moved to `GET /coplex/endpoints` (and bare

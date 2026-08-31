@@ -90,7 +90,8 @@ test(admin_ui_serves_html, [setup(setup_server), cleanup(teardown_server)]) :-
     atomic_list_concat([Base, '/coplex'], Url),
     http_get_text(Url, Text, ContentType),
     assertion(sub_atom(ContentType, _, _, _, 'text/html')),
-    assertion(sub_string(Text, _, _, _, "<!DOCTYPE html>")),
+    string_lower(Text, LowerText),
+    assertion(sub_string(LowerText, _, _, _, "<!doctype html>")),
     assertion(sub_string(Text, _, _, _, "coplex")).
 
 test(admin_ui_bare_root_parity, [setup(setup_server), cleanup(teardown_server)]) :-

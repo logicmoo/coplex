@@ -103,19 +103,46 @@ is now exposed over HTTP:
   via `plugin-lifecycle` hooks) and mirrors status/config/restart/
   shutdown through `plugin-api`.
 - **Browser-based admin UI — DONE**: `GET /coplex` (and bare `GET /`)
-  serves a small, self-contained HTML dashboard (`admin_ui_handler/1`
-  + the `admin_ui_html/1` constant, both in `coplex_server.pl`) —
-  browse the tool catalog, create/run/cancel/reset/inspect/delete
-  harnesses, all via plain `fetch()` calls against the JSON endpoints
-  above through absolute `/coplex/...` paths (so it works the same
-  loaded directly or through the workbench's proxy). No external
-  CSS/JS, no build step. This *is* the "new UI" the bullet below
-  originally asked for kept out of the core module -- it lives in
-  `coplex_server.pl`, the file already responsible for every
-  UI/network-facing concern, not in `codex_harness.pl`. The JSON
-  status/endpoint-list document that used to live at `GET /coplex`
-  moved to `GET /coplex/endpoints` (`coplex_endpoints_handler/1`, the
-  renamed former `coplex_status_handler/1`) to make room for it.
+  serves a small, self-contained HTML console (`admin_ui_handler/1`
+  + the `admin_ui_html/1` constant, both in `coplex_server.pl`) — a
+  two-pane dark-themed layout (sidebar: create-harness form, harness
+  list, tool catalog; detail pane: selected harness's summary/task/
+  answer/messages), styled after the `coplex_stdpy` sibling plugin's
+  task console for a consistent look across the workbench's agent-
+  harness plugins. Create/run/cancel/reset/inspect/delete harnesses,
+  all via plain `fetch()` calls against the JSON endpoints above
+  through absolute `/coplex/...` paths (so it works the same loaded
+  directly or through the workbench's proxy). No external CSS/JS, no
+  build step. This *is* the "new UI" the bullet below originally asked
+  for kept out of the core module -- it lives in `coplex_server.pl`,
+  the file already responsible for every UI/network-facing concern,
+  not in `codex_harness.pl`. The JSON status/endpoint-list document
+  that used to live at `GET /coplex` moved to `GET /coplex/endpoints`
+  (`coplex_endpoints_handler/1`, the renamed former
+  `coplex_status_handler/1`) to make room for it.
+  **Not ported from `coplex_stdpy`'s console**: live approve/deny
+  prompts for risky tool calls, and durable disk-persisted tasks that
+  survive a restart. `coplex_stdpy`'s `HarnessTaskManager` (see its
+  `runtime.py`) blocks a running task's thread mid-tool-dispatch on a
+  pending-approval/pending-input registry until a later, unrelated
+  REST call resolves it, and persists every task as JSON + a JSONL
+  event log under a state directory. Bringing genuine parity here
+  would mean: (1) a new pause/resume mechanism in
+  `codex_harness.pl`'s `decide_tool/5` path -- distinct from, and
+  layered on top of, the existing in-process-only `approval(Goal)`
+  option, since only a closed-vocabulary "allow"/"deny" decision would
+  ever be safe to accept from REST (see `sanitize_value/3`'s handling
+  of `adapter` for the established pattern of normalizing untrusted
+  JSON to one of a few fixed atoms); (2) new REST endpoints
+  (`POST /coplex/harnesses/<id>/approvals/<call_id>`,
+  `POST /coplex/harnesses/<id>/input`) with a timeout so a decision
+  that never arrives can't deadlock a run; (3) persisting
+  `harness_rec/3` state (and an incrementally-appended event log) to
+  disk and rehydrating it on `workbench_startup/0`, since harnesses
+  today are purely in-memory and vanish on restart. This is real new
+  engineering on the core agent loop, not a UI-only change -- treat it
+  as a separate, deliberately-scoped feature, not something to bundle
+  into a UI pass.
 - A remaining idea, not yet done: a CLI/REPL loop calling
   `harness_run/3` directly in-process for local scripting (as opposed
   to the REST API) — still worth adding if useful, but the REST layer

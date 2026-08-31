@@ -240,368 +240,425 @@ admin_ui_handler(Request) :-
 %   paths), never server-side templating, so this predicate is a
 %   pure, static constant.
 admin_ui_html(Html) :-
-    Html = "<!DOCTYPE html>
+    Html = "<!doctype html>
 <html lang='en'>
 <head>
 <meta charset='utf-8'>
-<title>coplex admin</title>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
+<meta http-equiv='Content-Security-Policy' content='default-src self; style-src unsafe-inline; script-src unsafe-inline; connect-src self; frame-ancestors self'>
+<title>coplex admin</title>
 <style>
   :root {
-    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #e6e8eb;
-    --muted: #9aa3b2; --accent: #4da3ff; --good: #3ecf8e; --bad: #ff6b6b;
-    --warn: #f5b043;
+    color-scheme: dark;
+    --bg: #06141a;
+    --panel: #0a2028;
+    --line: #24505e;
+    --text: #d7eef2;
+    --muted: #7fa2aa;
+    --cyan: #33e6db;
+    --violet: #b79aff;
+    --amber: #f6c85f;
+    --red: #ff7e97;
+    --green: #63e6a4;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.45 -apple-system, Segoe UI, Roboto, sans-serif;
+    margin: 0;
+    min-height: 100vh;
+    background: linear-gradient(145deg, #06141a 0%, #081a22 60%, #0b1726 100%);
+    color: var(--text);
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
   }
-  header {
-    display: flex; align-items: center; gap: 12px;
-    padding: 14px 20px; border-bottom: 1px solid var(--border);
-    background: var(--panel);
-  }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  header .tag {
-    font-size: 11px; color: var(--muted); border: 1px solid var(--border);
-    border-radius: 4px; padding: 2px 6px;
-  }
-  #status { margin-left: auto; font-size: 12px; color: var(--muted); }
-  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
-  section { margin-bottom: 28px; }
-  h2 {
-    font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
-    color: var(--muted); margin: 0 0 10px;
-  }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td {
-    text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; }
-  tr:hover td { background: rgba(255,255,255,0.02); }
-  .panel {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 14px 16px;
-  }
-  .badge {
-    display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
-    border: 1px solid var(--border); color: var(--muted);
-  }
-  .badge-running { color: var(--good); border-color: var(--good); }
-  .badge-idle { color: var(--muted); }
-  .badge-error { color: var(--bad); border-color: var(--bad); }
-  .risk-read_only { color: var(--muted); }
-  .risk-write { color: var(--warn); border-color: var(--warn); }
-  .risk-process, .risk-network { color: var(--bad); border-color: var(--bad); }
-  code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-  button {
-    background: var(--accent); color: #08131f; border: none; border-radius: 5px;
-    padding: 4px 10px; font-size: 12px; cursor: pointer; font-weight: 600;
-    margin-right: 4px;
-  }
-  button:hover { filter: brightness(1.1); }
-  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
-  button.danger { background: var(--bad); color: #2a0808; }
-  button:disabled { opacity: .4; cursor: default; }
-  input[type=text], select, textarea {
-    background: #0c0e12; border: 1px solid var(--border); color: var(--text);
-    border-radius: 5px; padding: 5px 8px; font-size: 13px; font-family: inherit;
-  }
-  form.create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
-  form.create-form label {
-    display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted);
-  }
-  label.inline { flex-direction: row !important; align-items: center; gap: 5px !important; }
-  .muted { color: var(--muted); }
-  .empty { color: var(--muted); font-style: italic; padding: 10px 0; }
-  #run-modal, #msg-modal {
-    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
-    align-items: center; justify-content: center; z-index: 10;
-  }
-  #run-modal .box, #msg-modal .box {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 18px; width: 560px; max-width: 92vw; max-height: 80vh; overflow: auto;
-  }
-  #msg-modal .box { width: 720px; }
-  .msg-entry { border-bottom: 1px dashed var(--border); padding: 8px 0; }
-  .msg-role { font-weight: 600; text-transform: uppercase; font-size: 11px; color: var(--accent); }
-  pre.msg-content {
-    white-space: pre-wrap; word-break: break-word; margin: 4px 0 0; font-size: 12px;
+  button, input, select, textarea { font: inherit; }
+  button, input, select, textarea {
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    background: #071b22;
     color: var(--text);
   }
-  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; }
-  footer a { color: var(--accent); }
+  button { cursor: pointer; padding: 8px 12px; color: var(--cyan); }
+  button:hover:not(:disabled) { border-color: var(--cyan); background: #0b2b33; }
+  button:disabled { cursor: not-allowed; opacity: .45; }
+  input, select, textarea { width: 100%; padding: 8px 9px; }
+  textarea { min-height: 80px; resize: vertical; }
+  label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
+  label.inline { display: flex; flex-direction: row; align-items: center; gap: 6px !important; }
+  label.inline input { width: auto; }
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    background: rgba(5, 20, 26, .92); position: sticky; top: 0; z-index: 3;
+  }
+  h1, h2, h3, p { margin: 0; }
+  h1 { font-size: 18px; color: var(--cyan); letter-spacing: .04em; }
+  h2 { font-size: 13px; color: var(--violet); text-transform: uppercase; letter-spacing: .08em; }
+  h3 { font-size: 12px; color: var(--cyan); margin: 12px 0 6px; }
+  small { color: var(--muted); }
+  .badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; align-items: center; }
+  .badge { padding: 4px 7px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.ok { border-color: #28745a; color: var(--green); }
+  .badge.warn { border-color: #806b33; color: var(--amber); }
+  main { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(420px, 1.4fr); min-height: calc(100vh - 62px); }
+  aside, .detail { min-width: 0; padding: 14px; }
+  aside { border-right: 1px solid var(--line); }
+  .panel { border: 1px solid var(--line); background: rgba(7, 28, 35, .88); margin-bottom: 12px; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--line); background: #12253a; }
+  .panel-body { padding: 11px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  .form-grid .wide { grid-column: 1 / -1; }
+  .row-list { display: grid; gap: 6px; max-height: 34vh; overflow: auto; }
+  .row-btn { display: grid; grid-template-columns: 1fr auto; gap: 5px 9px; width: 100%; text-align: left; color: var(--text); }
+  .row-btn.active { border-color: var(--cyan); background: #0b2b33; }
+  .row-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-btn small { grid-column: 1 / -1; }
+  .state { color: var(--muted); text-transform: uppercase; font-size: 10px; }
+  .state.running { color: var(--amber); }
+  .state.idle { color: var(--green); }
+  .state.error { color: var(--red); }
+  .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .summary div { padding: 8px; border: 1px solid var(--line); background: #071b22; }
+  .summary b, .summary span { display: block; overflow-wrap: anywhere; }
+  .summary span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+  pre { margin: 0; padding: 10px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #05151b; border: 1px solid var(--line); color: #bfe4e8; max-height: 30vh; }
+  .answer { min-height: 60px; }
+  .answer.error { color: var(--red); }
+  .events { display: grid; gap: 5px; max-height: 40vh; overflow: auto; }
+  .event { display: grid; grid-template-columns: 32px minmax(90px, .4fr) minmax(0, 1.6fr); gap: 8px; padding: 7px; border: 1px solid #183d48; background: #071b22; }
+  .event code { color: var(--violet); }
+  .event span:last-child { color: var(--muted); overflow-wrap: anywhere; white-space: pre-wrap; }
+  .risk-read_only { color: var(--muted); }
+  .risk-write { color: var(--amber); border-color: var(--amber); }
+  .risk-process, .risk-network { color: var(--red); border-color: var(--red); }
+  .danger { color: var(--red); border-color: #70404a; }
+  .secondary { color: var(--text); }
+  .empty { padding: 18px; text-align: center; color: var(--muted); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 7px; }
+  #run-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6); align-items: center; justify-content: center; z-index: 10; }
+  #run-modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 16px; width: 520px; max-width: 92vw; }
+  footer { text-align: center; color: var(--muted); font-size: 11px; padding: 16px; }
+  footer a { color: var(--cyan); }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+    .summary { grid-template-columns: 1fr 1fr; }
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>coplex</h1>
-  <span class='tag'>admin</span>
-  <span id='status'>loading…</span>
+  <div>
+    <h1>coplex</h1>
+    <small>SWI-Prolog coding-agent harness console</small>
+  </div>
+  <div class='badges'>
+    <span id='server-badge' class='badge'>loading...</span>
+    <button id='refresh' type='button'>Refresh</button>
+  </div>
 </header>
 <main>
-
-  <section>
-    <h2>Create harness</h2>
-    <form class='create-form panel' id='create-form'>
-      <label>root <input type='text' id='f-root' value='.' size='18'></label>
-      <label>adapter
-        <select id='f-adapter'>
-          <option value='scripted'>scripted</option>
-          <option value='mock'>mock</option>
-          <option value='openai'>openai</option>
-        </select>
-      </label>
-      <label>model <input type='text' id='f-model' placeholder='default' size='14'></label>
-      <label class='inline'><input type='checkbox' id='f-shell'> allow_shell</label>
-      <label class='inline'><input type='checkbox' id='f-network'> allow_network</label>
-      <button type='submit'>Create</button>
-    </form>
-  </section>
-
-  <section>
-    <h2>Harnesses <span class='muted' id='harness-count'></span></h2>
-    <div class='panel'>
-      <table>
-        <thead><tr>
-          <th>id</th><th>task</th><th>state</th><th>step</th><th>msgs/tools</th>
-          <th>last answer / error</th><th>created</th><th>actions</th>
-        </tr></thead>
-        <tbody id='harnesses-body'></tbody>
-      </table>
-      <div class='empty' id='harnesses-empty' style='display:none'>No harnesses yet — create one above.</div>
+  <aside>
+    <section class='panel'>
+      <div class='panel-head'><h2>New harness</h2><span id='submit-state' class='state'></span></div>
+      <form id='create-form' class='panel-body form-grid'>
+        <label class='wide'>Task (optional - runs immediately if given)
+          <textarea id='f-task' placeholder='Describe the repository work...'></textarea>
+        </label>
+        <label>Root <input id='f-root' value='.'></label>
+        <label>Adapter
+          <select id='f-adapter'>
+            <option value='scripted'>scripted</option>
+            <option value='mock'>mock</option>
+            <option value='openai'>openai</option>
+          </select>
+        </label>
+        <label>Model <input id='f-model' list='models' placeholder='default' autocomplete='off'>
+          <datalist id='models'>
+            <option value='gpt-4o-mini'></option>
+            <option value='gpt-4o'></option>
+            <option value='gpt-4.1-mini'></option>
+          </datalist>
+        </label>
+        <label class='inline'><input type='checkbox' id='f-shell'> allow_shell</label>
+        <label class='inline'><input type='checkbox' id='f-network'> allow_network</label>
+        <button id='submit' class='wide' type='submit'>Create harness</button>
+      </form>
+    </section>
+    <section class='panel'>
+      <div class='panel-head'><h2>Harnesses</h2><span id='harness-count' class='state'>0</span></div>
+      <div id='harness-list' class='panel-body row-list'><div class='empty'>No harnesses yet.</div></div>
+    </section>
+    <section class='panel'>
+      <div class='panel-head'><h2>Tools</h2><span id='tool-count' class='state'>0</span></div>
+      <div id='tool-list' class='panel-body row-list'></div>
+    </section>
+  </aside>
+  <section class='detail'>
+    <div id='no-selection' class='panel'><div class='empty'>Select or create a harness to inspect it.</div></div>
+    <div id='harness-detail' hidden>
+      <section class='panel'>
+        <div class='panel-head'>
+          <h2>Selected harness</h2>
+          <div class='toolbar'>
+            <button id='run-btn' type='button'>Run</button>
+            <button id='reset-btn' class='secondary' type='button'>Reset</button>
+            <button id='cancel-btn' class='secondary' type='button'>Cancel</button>
+            <button id='delete-btn' class='danger' type='button'>Delete</button>
+          </div>
+        </div>
+        <div class='panel-body'>
+          <div id='harness-summary' class='summary'></div>
+          <h3>Task</h3>
+          <pre id='harness-task'></pre>
+          <h3>Answer / error</h3>
+          <pre id='harness-answer' class='answer'></pre>
+        </div>
+      </section>
+      <section class='panel'>
+        <div class='panel-head'><h2>Messages</h2><span id='message-count' class='state'>0</span></div>
+        <div id='messages' class='panel-body events'></div>
+      </section>
     </div>
   </section>
-
-  <section>
-    <h2>Tools</h2>
-    <div class='panel'>
-      <table>
-        <thead><tr><th>name</th><th>risk</th><th>endpoint</th><th>description</th></tr></thead>
-        <tbody id='tools-body'></tbody>
-      </table>
-    </div>
-  </section>
-
 </main>
 <footer>
   raw status/endpoint list: <a href='/coplex/endpoints'>/coplex/endpoints</a>
-  · <a href='https://github.com/logicmoo/coplex'>coplex on GitHub</a>
+  - <a href='https://github.com/logicmoo/coplex'>coplex on GitHub</a>
 </footer>
 
 <div id='run-modal'>
   <div class='box'>
-    <h2 style='margin-top:0'>Run task</h2>
-    <p class='muted' id='run-modal-id'></p>
-    <textarea id='run-task' rows='4' style='width:100%' placeholder='Describe the task…'></textarea>
-    <p>
+    <h2 style='margin-bottom:10px'>Run task</h2>
+    <p id='run-modal-id' class='state' style='margin-bottom:8px'></p>
+    <textarea id='run-task' rows='4' placeholder='Describe the task...'></textarea>
+    <p style='margin-top:10px'>
       <button id='run-submit'>Run (async)</button>
       <button class='secondary' id='run-cancel'>Cancel</button>
     </p>
   </div>
 </div>
 
-<div id='msg-modal'>
-  <div class='box'>
-    <h2 style='margin-top:0'>Messages</h2>
-    <p class='muted' id='msg-modal-id'></p>
-    <div id='msg-list'></div>
-    <p><button class='secondary' id='msg-close'>Close</button></p>
-  </div>
-</div>
-
 <script>
-var BASE = '/coplex';
-var runTargetId = null;
+const BASE = '/coplex';
+let selectedId = null;
+let polling = false;
 
-function jfetch(path, opts) {
-  return fetch(BASE + path, opts).then(function (res) {
-    return res.text().then(function (text) {
-      var body = null;
-      try { body = text ? JSON.parse(text) : null; } catch (e) { body = null; }
-      if (!res.ok) {
-        var msg = (body && body.error) ? body.error : ('HTTP ' + res.status);
-        throw new Error(msg);
-      }
-      return body;
-    });
+const byId = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? '');
+const jsonText = (value) => JSON.stringify(value ?? {}, null, 2);
+
+async function api(path, options) {
+  const res = await fetch(`${BASE}${path}`, {
+    ...(options || {}),
+    headers: {'Content-Type': 'application/json', ...((options || {}).headers || {})}
   });
-}
-
-function el(tag, attrs, children) {
-  var e = document.createElement(tag);
-  attrs = attrs || {};
-  for (var k in attrs) {
-    if (k === 'text') e.textContent = attrs[k];
-    else if (k === 'title') e.title = attrs[k];
-    else if (k === 'class') e.className = attrs[k];
-    else if (k.indexOf('on') === 0 && typeof attrs[k] === 'function') e[k] = attrs[k];
-    else e.setAttribute(k, attrs[k]);
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch (e) { body = null; }
+  if (!res.ok) {
+    const msg = (body && body.error) ? body.error : `HTTP ${res.status}`;
+    throw new Error(msg);
   }
-  (children || []).forEach(function (c) { e.appendChild(c); });
-  return e;
+  return body;
 }
 
-function truncate(s, n) {
-  s = s || '';
-  return s.length > n ? s.slice(0, n) + '…' : s;
+function showError(error) {
+  byId('submit-state').textContent = error instanceof Error ? error.message : String(error);
+  byId('submit-state').className = 'state error';
 }
 
-function fmtTime(ts) {
-  if (!ts) return '';
-  return new Date(ts * 1000).toLocaleString();
+async function loadStatus() {
+  try {
+    const s = await api('/endpoints');
+    byId('server-badge').textContent = `swipl ${s.swipl_version} - port ${s.server.port || '?'} - ${s.server.running ? 'running' : 'stopped'}`;
+    byId('server-badge').className = `badge ${s.server.running ? 'ok' : 'warn'}`;
+  } catch (error) {
+    byId('server-badge').textContent = `unavailable: ${error.message}`;
+    byId('server-badge').className = 'badge warn';
+  }
 }
 
-function button(label, cls, fn) {
-  return el('button', {class: cls || 'secondary', text: label, onclick: fn});
+async function loadTools() {
+  const t = await api('/tools');
+  const tools = t.tools || [];
+  byId('tool-count').textContent = String(tools.length);
+  byId('tool-list').innerHTML = tools.map((tool) => `
+    <div class='row-btn'>
+      <span>${esc(tool.name)}</span>
+      <b class='state risk-${esc(tool.risk)}'>${esc(tool.risk)}</b>
+      <small>${esc(tool.method)} ${esc(tool.endpoint)}</small>
+    </div>`).join('');
 }
 
-function loadStatus() {
-  jfetch('/endpoints').then(function (s) {
-    var elx = document.getElementById('status');
-    elx.textContent = 'swipl ' + s.swipl_version + ' · port ' + (s.server.port || '?') +
-      ' · ' + (s.server.running ? 'running' : 'stopped');
-  }).catch(function (e) {
-    document.getElementById('status').textContent = 'status unavailable: ' + e.message;
+function renderHarnessList(harnesses) {
+  byId('harness-count').textContent = String(harnesses.length);
+  const list = byId('harness-list');
+  if (!harnesses.length) {
+    list.innerHTML = `<div class='empty'>No harnesses yet.</div>`;
+    return;
+  }
+  list.innerHTML = harnesses.map((h) => {
+    const state = h.running ? 'running' : (h.last_error ? 'error' : 'idle');
+    return `
+    <button class='row-btn ${h.id === selectedId ? 'active' : ''}' data-id='${esc(h.id)}' type='button'>
+      <span>${esc(h.current_task) || '(no task yet)'}</span>
+      <b class='state ${state}'>${state}</b>
+      <small>${esc(h.id).slice(0, 8)} - msgs ${esc(h.message_count)} - ${new Date((h.created_at || 0) * 1000).toLocaleString()}</small>
+    </button>`;
+  }).join('');
+  list.querySelectorAll('[data-id]').forEach((btn) => {
+    btn.addEventListener('click', () => selectHarness(btn.dataset.id));
   });
 }
 
-function loadTools() {
-  jfetch('/tools').then(function (t) {
-    var tbody = document.getElementById('tools-body');
-    tbody.innerHTML = '';
-    (t.tools || []).forEach(function (tool) {
-      tbody.appendChild(el('tr', null, [
-        el('td', null, [el('code', {text: tool.name})]),
-        el('td', null, [el('span', {class: 'badge risk-' + tool.risk, text: tool.risk})]),
-        el('td', null, [el('code', {text: tool.method + ' ' + tool.endpoint})]),
-        el('td', {text: tool.description})
-      ]));
-    });
-  }).catch(function () {});
+async function loadHarnesses() {
+  const h = await api('/harnesses');
+  const harnesses = h.harnesses || [];
+  if (!selectedId && harnesses.length) selectedId = harnesses[0].id;
+  renderHarnessList(harnesses);
+  return harnesses;
 }
 
-function openRunModal(id) {
-  runTargetId = id;
-  document.getElementById('run-modal-id').textContent = id;
-  document.getElementById('run-task').value = '';
-  document.getElementById('run-modal').style.display = 'flex';
+function renderMessages(messages) {
+  byId('message-count').textContent = String(messages.length);
+  byId('messages').innerHTML = messages.length ? messages.map((m, i) => {
+    const content = (typeof m.content === 'string') ? m.content : jsonText(m.content);
+    return `<div class='event'><b>#${i}</b><code>${esc(m.role)}</code><span>${esc(content)}</span></div>`;
+  }).join('') : `<div class='empty'>No messages yet.</div>`;
 }
 
-function closeRunModal() {
-  document.getElementById('run-modal').style.display = 'none';
-  runTargetId = null;
+async function refreshSelected() {
+  if (!selectedId) {
+    byId('no-selection').hidden = false;
+    byId('harness-detail').hidden = true;
+    return;
+  }
+  let snap;
+  try {
+    snap = await api(`/harnesses/${encodeURIComponent(selectedId)}`);
+  } catch (error) {
+    selectedId = null;
+    byId('no-selection').hidden = false;
+    byId('harness-detail').hidden = true;
+    return;
+  }
+  byId('no-selection').hidden = true;
+  byId('harness-detail').hidden = false;
+  const state = snap.running ? 'running' : (snap.last_error ? 'error' : 'idle');
+  byId('harness-summary').innerHTML = [
+    ['Status', state], ['Iteration', snap.iteration], ['Messages', (snap.messages || []).length], ['Tools run', (snap.tool_activity || []).length]
+  ].map(([label, value]) => `<div><b class='state ${state}'>${esc(value)}</b><span>${esc(label)}</span></div>`).join('');
+  byId('harness-task').textContent = snap.current_task || '(no task submitted yet)';
+  const answerEl = byId('harness-answer');
+  if (snap.last_error) {
+    answerEl.textContent = `ERROR: ${snap.last_error.message || jsonText(snap.last_error)}`;
+    answerEl.className = 'answer error';
+  } else {
+    answerEl.textContent = snap.last_answer || 'No final answer yet.';
+    answerEl.className = 'answer';
+  }
+  byId('cancel-btn').disabled = !snap.running;
+  renderMessages(snap.messages || []);
 }
 
-function openMsgModal(id) {
-  document.getElementById('msg-modal-id').textContent = id;
-  var list = document.getElementById('msg-list');
-  list.innerHTML = '';
-  list.appendChild(el('p', {class: 'muted', text: 'loading…'}));
-  document.getElementById('msg-modal').style.display = 'flex';
-  jfetch('/harnesses/' + id + '/messages').then(function (r) {
-    list.innerHTML = '';
-    if (!r.messages || !r.messages.length) {
-      list.appendChild(el('p', {class: 'muted', text: 'No messages yet.'}));
-      return;
-    }
-    r.messages.forEach(function (m) {
-      var content = (typeof m.content === 'string') ? m.content : JSON.stringify(m.content, null, 2);
-      list.appendChild(el('div', {class: 'msg-entry'}, [
-        el('div', {class: 'msg-role', text: m.role}),
-        el('pre', {class: 'msg-content', text: content})
-      ]));
-    });
-  }).catch(function (e) {
-    list.innerHTML = '';
-    list.appendChild(el('p', {class: 'muted', text: 'Failed to load: ' + e.message}));
-  });
+async function selectHarness(id) {
+  selectedId = id;
+  await Promise.all([loadHarnesses(), refreshSelected()]);
 }
 
-function closeMsgModal() {
-  document.getElementById('msg-modal').style.display = 'none';
+async function refreshAll() {
+  if (polling) return;
+  polling = true;
+  try {
+    await loadStatus();
+    await loadHarnesses();
+    await refreshSelected();
+  } catch (error) {
+    showError(error);
+  } finally {
+    polling = false;
+  }
 }
 
-function harnessAction(id, action) {
-  return jfetch('/harnesses/' + id + '/' + action, {method: 'POST',
-    headers: {'Content-Type': 'application/json'}, body: '{}'})
-    .then(loadHarnesses).catch(function (e) { alert(action + ' failed: ' + e.message); });
-}
-
-function deleteHarness(id) {
-  if (!confirm('Delete harness ' + id + '?')) return;
-  jfetch('/harnesses/' + id, {method: 'DELETE'})
-    .then(loadHarnesses).catch(function (e) { alert('delete failed: ' + e.message); });
-}
-
-function loadHarnesses() {
-  return jfetch('/harnesses').then(function (h) {
-    var tbody = document.getElementById('harnesses-body');
-    var empty = document.getElementById('harnesses-empty');
-    tbody.innerHTML = '';
-    var list = h.harnesses || [];
-    document.getElementById('harness-count').textContent = list.length ? ('(' + list.length + ')') : '';
-    empty.style.display = list.length ? 'none' : 'block';
-    list.forEach(function (hh) {
-      var stateCls = hh.running ? 'badge-running' : (hh.last_error ? 'badge-error' : 'badge-idle');
-      var stateText = hh.running ? 'running' : (hh.last_error ? 'error' : 'idle');
-      var lastText = hh.last_error ? ('error: ' + (hh.last_error.message || hh.last_error))
-                                    : (hh.last_answer || '');
-      var actions = el('td');
-      actions.appendChild(button('Run', null, function () { openRunModal(hh.id); }));
-      actions.appendChild(button('Cancel', null, function () { harnessAction(hh.id, 'cancel'); }));
-      actions.appendChild(button('Reset', null, function () { harnessAction(hh.id, 'reset'); }));
-      actions.appendChild(button('Msgs', null, function () { openMsgModal(hh.id); }));
-      actions.appendChild(button('Delete', 'danger', function () { deleteHarness(hh.id); }));
-      tbody.appendChild(el('tr', null, [
-        el('td', null, [el('code', {text: hh.id.slice(0, 8), title: hh.id})]),
-        el('td', {text: truncate(hh.current_task, 40)}),
-        el('td', null, [el('span', {class: 'badge ' + stateCls, text: stateText})]),
-        el('td', {text: hh.iteration}),
-        el('td', {text: hh.message_count + ' / ' + hh.tool_call_count}),
-        el('td', {text: truncate(lastText, 60)}),
-        el('td', {text: fmtTime(hh.created_at)}),
-        actions
-      ]));
-    });
-  }).catch(function () {});
-}
-
-document.getElementById('create-form').addEventListener('submit', function (ev) {
+byId('create-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
-  var body = {
-    root: document.getElementById('f-root').value || '.',
-    adapter: document.getElementById('f-adapter').value,
-    allow_shell: document.getElementById('f-shell').checked,
-    allow_network: document.getElementById('f-network').checked
-  };
-  var model = document.getElementById('f-model').value;
-  if (model) body.model = model;
-  jfetch('/harnesses', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)})
-    .then(loadHarnesses)
-    .catch(function (e) { alert('create failed: ' + e.message); });
+  byId('submit').disabled = true;
+  byId('submit-state').textContent = 'creating...';
+  byId('submit-state').className = 'state';
+  try {
+    const body = {
+      root: byId('f-root').value || '.',
+      adapter: byId('f-adapter').value,
+      allow_shell: byId('f-shell').checked,
+      allow_network: byId('f-network').checked
+    };
+    const model = byId('f-model').value;
+    if (model) body.model = model;
+    const created = await api('/harnesses', {method: 'POST', body: JSON.stringify(body)});
+    selectedId = created.id;
+    const task = byId('f-task').value;
+    if (task) {
+      await api(`/harnesses/${encodeURIComponent(created.id)}/run`, {
+        method: 'POST', body: JSON.stringify({task, async: true})
+      });
+    }
+    byId('f-task').value = '';
+    byId('submit-state').textContent = 'created';
+    byId('submit-state').className = 'state idle';
+    await refreshAll();
+  } catch (error) {
+    showError(error);
+  } finally {
+    byId('submit').disabled = false;
+  }
 });
 
-document.getElementById('run-submit').addEventListener('click', function () {
-  var task = document.getElementById('run-task').value;
-  var id = runTargetId;
-  closeRunModal();
-  jfetch('/harnesses/' + id + '/run', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({task: task, async: true})})
-    .then(loadHarnesses)
-    .catch(function (e) { alert('run failed: ' + e.message); });
+byId('run-btn').addEventListener('click', () => {
+  if (!selectedId) return;
+  byId('run-modal-id').textContent = selectedId;
+  byId('run-task').value = '';
+  byId('run-modal').style.display = 'flex';
 });
-document.getElementById('run-cancel').addEventListener('click', closeRunModal);
-document.getElementById('msg-close').addEventListener('click', closeMsgModal);
+byId('run-cancel').addEventListener('click', () => { byId('run-modal').style.display = 'none'; });
+byId('run-submit').addEventListener('click', async () => {
+  const task = byId('run-task').value;
+  const id = selectedId;
+  byId('run-modal').style.display = 'none';
+  try {
+    await api(`/harnesses/${encodeURIComponent(id)}/run`, {
+      method: 'POST', body: JSON.stringify({task, async: true})
+    });
+    await refreshAll();
+  } catch (error) { showError(error); }
+});
 
-loadStatus();
-loadTools();
-loadHarnesses();
-setInterval(loadStatus, 5000);
-setInterval(loadHarnesses, 3000);
+byId('cancel-btn').addEventListener('click', async () => {
+  if (!selectedId) return;
+  try {
+    await api(`/harnesses/${encodeURIComponent(selectedId)}/cancel`, {method: 'POST', body: '{}'});
+    await refreshAll();
+  } catch (error) { showError(error); }
+});
+byId('reset-btn').addEventListener('click', async () => {
+  if (!selectedId) return;
+  try {
+    await api(`/harnesses/${encodeURIComponent(selectedId)}/reset`, {method: 'POST', body: '{}'});
+    await refreshAll();
+  } catch (error) { showError(error); }
+});
+byId('delete-btn').addEventListener('click', async () => {
+  if (!selectedId) return;
+  if (!confirm(`Delete harness ${selectedId}?`)) return;
+  try {
+    await api(`/harnesses/${encodeURIComponent(selectedId)}`, {method: 'DELETE'});
+    selectedId = null;
+    await refreshAll();
+  } catch (error) { showError(error); }
+});
+byId('refresh').addEventListener('click', refreshAll);
+
+void loadTools();
+void refreshAll();
+window.setInterval(() => { if (!document.hidden) void refreshAll(); }, 2000);
 </script>
 </body>
 </html>
