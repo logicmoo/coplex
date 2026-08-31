@@ -14,7 +14,7 @@ swipl -g run_tests -t halt test/test_codex_harness.pl
 swipl -g run_tests -t halt test/test_codex_harness_server.pl
 ```
 
-(34 tests / 15 tests respectively at the time of writing — see below
+(34 tests / 18 tests respectively at the time of writing — see below
 for what each one covers.)
 
 ## `test/test_codex_harness.pl` — 34 tests, by category
@@ -108,9 +108,19 @@ for what each one covers.)
   is genuinely read-only, proving `subagent_allow_writes` actually
   gates write access rather than being decorative.
 
-## `test/test_codex_harness_server.pl` — 15 tests
+## `test/test_codex_harness_server.pl` — 18 tests
 
 - `health` — `GET /health` liveness.
+- `admin_ui_serves_html` — `GET /coplex` replies HTML (not JSON),
+  `Content-Type: text/html`, containing the dashboard's markup.
+- `admin_ui_bare_root_parity` — bare `GET /` serves byte-identical
+  content to `GET /coplex` (the same root/prefix parity every other
+  route in this server has).
+- `endpoints_moved_to_coplex_endpoints` — the JSON status/endpoint
+  document that used to live at `GET /coplex` now lives at `GET
+  /coplex/endpoints` (and bare `/endpoints`), and `GET /coplex` itself
+  no longer parses as JSON at all — proving the move actually
+  happened, not just additively.
 - `tools_nonempty` — `GET /tools` mirrors the core catalog over HTTP.
 - `tools_advertise_real_endpoint` — every `GET /tools` entry carries a
   real `method`/`endpoint` (e.g. `read_file` → `POST

@@ -166,10 +166,12 @@ lifecycle hooks (`workbenchStartup`/`workbenchShutdown`) and exposes
 it through the plugin-api (`status`/`config`/`restart`/`shutdown`); see
 `plugin.json`. Manual equivalent: `python plugin.py start|stop|status|restart`.
 
-Endpoints (JSON in, JSON out):
+Endpoints (JSON in, JSON out, except `/coplex` itself which is HTML):
 
 | Method | Path                          | Behavior                                   |
 |--------|-------------------------------|---------------------------------------------|
+| GET    | `/coplex`                     | Self-contained HTML admin dashboard (browse tools, create/run/inspect/delete harnesses). |
+| GET    | `/coplex/endpoints`           | Status/endpoint-list JSON (used to live at `/coplex` itself -- see below). |
 | GET    | `/health`                     | Liveness check.                              |
 | GET    | `/tools`                      | `harness_tool_specs/1`, each entry annotated with a real `method`/`endpoint` (below). |
 | POST   | `/tools/<name>`               | `harness_tool/4` against a shared, lazily-created harness; body is the tool's Arguments. No harness id needed. |
@@ -187,6 +189,24 @@ Endpoints (JSON in, JSON out):
 Unknown/nonexistent harness ids return HTTP 404; a `run` request against
 a harness that's already running returns HTTP 409; internal errors
 return HTTP 500 with `{"ok": false, "error": "..."}`.
+
+### Admin UI
+
+`GET /coplex` (also bare `GET /`) serves a small, self-contained HTML
+dashboard -- no external CSS/JS, no build step, no CDN dependency --
+for driving this REST API by hand: browse the tool catalog, create a
+harness (root/adapter/model/allow_shell/allow_network), run/cancel/
+reset it, inspect its message transcript, and delete it. Everything it
+does is a plain `fetch()` against the JSON endpoints in the table
+above through absolute `/coplex/...` paths, so it works identically
+whether you load it directly (`http://localhost:8840/coplex`) or
+through the workbench's proxy mount. It carries no authentication of
+its own -- same security model as the rest of this API (see below).
+
+The JSON status/endpoint-list document that used to live at `GET
+/coplex` itself moved to `GET /coplex/endpoints` (and bare
+`/endpoints`), so a script or monitoring tool that used to poll
+`/coplex` for that JSON should point at `/coplex/endpoints` instead.
 
 ### Calling a tool directly
 

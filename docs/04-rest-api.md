@@ -19,6 +19,8 @@ swipl coplex_server_main.pl --port=8840 --host=localhost
 
 | Method | Path | Core predicate | Notes |
 |---|---|---|---|
+| GET | `/coplex` | `admin_ui_handler/1` | Self-contained HTML admin dashboard (see [Admin UI](#admin-ui) below). Not JSON. |
+| GET | `/coplex/endpoints` | `coplex_endpoints_handler/1` | Status/endpoint-list JSON — used to live at `/coplex` itself. |
 | GET | `/health` | — | Liveness check: `{"ok":true,"service":"coplex"}`. |
 | GET | `/tools` | `harness_tool_specs/1` | Static tool catalog; each entry also carries a real `method`/`endpoint` (see below). |
 | POST | `/tools/<name>` | `harness_tool/4` | Runs one tool against a shared, lazily-created harness — no harness id required. |
@@ -46,6 +48,37 @@ Every status/error mapping funnels through one shared predicate,
 `error_status/2`, used by both `with_existing_harness/2` and
 `with_json_body/3` — so a caught error gets the same HTTP code
 regardless of which helper happened to catch it first.
+
+### Admin UI
+
+`GET /coplex` (and, for parity, bare `GET /`) is served by
+`admin_ui_handler/1`, which replies with a small, self-contained HTML
+dashboard — markup, CSS, and JS all inlined in one string
+(`admin_ui_html/1`), no external assets, no build step, no CDN
+dependency. It exists purely as a thin client over the JSON endpoints
+in the table above:
+
+- **Tools** — lists `GET /tools`'s catalog (name, risk, method +
+  endpoint, description).
+- **Harnesses** — a create form (`POST /harnesses`) plus a live table
+  (polls `GET /harnesses` every 3s) with per-row actions: Run (opens a
+  task prompt, then `POST .../run` with `{"async": true}`), Cancel,
+  Reset, Msgs (`GET .../messages` in a modal), Delete.
+
+All of its `fetch()` calls use absolute `/coplex/...` paths, so the
+same page works identically whether a browser loaded it directly from
+this server or through the workbench's stripped-prefix proxy mount
+(see the module docstring's discussion of that mount). It carries no
+authentication of its own, same as the rest of this API — see the
+security model below.
+
+This route used to serve the JSON status/endpoint-list document
+instead (identity, swipl version, server binding, the endpoint list);
+that moved to `GET /coplex/endpoints` (and bare `/endpoints`), served
+by `coplex_endpoints_handler/1` (the renamed former
+`coplex_status_handler/1`) — unchanged in shape, just a different
+path, so a script or monitoring tool that used to poll `/coplex`
+directly needs to point at `/coplex/endpoints` now.
 
 ### Direct tool calls (`GET /tools` endpoint field)
 

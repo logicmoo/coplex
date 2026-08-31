@@ -101,6 +101,20 @@ is now exposed over HTTP:
 - `plugin.py` supervises the server as a subprocess (start/stop/health
   via `plugin-lifecycle` hooks) and mirrors status/config/restart/
   shutdown through `plugin-api`.
+- **Browser-based admin UI — DONE**: `GET /coplex` (and bare `GET /`)
+  serves a small, self-contained HTML dashboard (`admin_ui_handler/1`
+  + the `admin_ui_html/1` constant, both in `coplex_server.pl`) —
+  browse the tool catalog, create/run/cancel/reset/inspect/delete
+  harnesses, all via plain `fetch()` calls against the JSON endpoints
+  above through absolute `/coplex/...` paths (so it works the same
+  loaded directly or through the workbench's proxy). No external
+  CSS/JS, no build step. This *is* the "new UI" the bullet below
+  originally asked for kept out of the core module -- it lives in
+  `coplex_server.pl`, the file already responsible for every
+  UI/network-facing concern, not in `codex_harness.pl`. The JSON
+  status/endpoint-list document that used to live at `GET /coplex`
+  moved to `GET /coplex/endpoints` (`coplex_endpoints_handler/1`, the
+  renamed former `coplex_status_handler/1`) to make room for it.
 - A remaining idea, not yet done: a CLI/REPL loop calling
   `harness_run/3` directly in-process for local scripting (as opposed
   to the REST API) — still worth adding if useful, but the REST layer

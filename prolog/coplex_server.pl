@@ -142,13 +142,20 @@ cors_origin_list(Raw, Origins) :-
 %   Every route answers at the root and, in parity, under the /coplex
 %   prefix (the pack's slug), so both the workbench's stripped-prefix
 %   proxy mount and direct prefixed callers reach the same handlers.
+%   `/coplex` (and bare `/`) now serve the admin UI (see
+%   admin_ui_handler/1); the JSON status/endpoint-list document that
+%   used to live at `/coplex` moved to `/coplex/endpoints` (and bare
+%   `/endpoints`) -- see coplex_endpoints_handler/1.
+:- http_handler('/', admin_ui_handler, [methods([get,options])]).
+:- http_handler('/endpoints', coplex_endpoints_handler, [methods([get,options])]).
 :- http_handler('/health', health_handler, [methods([get,options])]).
 :- http_handler('/shutdown', shutdown_handler, [methods([post,options])]).
 :- http_handler('/tools', tools_handler, [methods([get,options])]).
 :- http_handler('/tools/', direct_tool_item, [prefix]).
 :- http_handler('/harnesses', harnesses_collection, [methods([get,post,options])]).
 :- http_handler('/harnesses/', harnesses_item, [prefix]).
-:- http_handler('/coplex', coplex_status_handler, [methods([get,options])]).
+:- http_handler('/coplex', admin_ui_handler, [methods([get,options])]).
+:- http_handler('/coplex/endpoints', coplex_endpoints_handler, [methods([get,options])]).
 :- http_handler('/coplex/health', health_handler, [methods([get,options])]).
 :- http_handler('/coplex/shutdown', shutdown_handler, [methods([post,options])]).
 :- http_handler('/coplex/tools', tools_handler, [methods([get,options])]).
@@ -191,12 +198,413 @@ health_handler(Request) :-
         reply_json_dict(_{ok:true, service:"coplex"})
     ).
 
-%!  coplex_status_handler(+Request) is det.
+%!  admin_ui_handler(+Request) is det.
 %
-%   GET /coplex -- the same status document `python plugin.py status`
-%   prints on the host side: identity, swipl version, server binding,
-%   path prefixes, and the endpoint list.
-coplex_status_handler(Request) :-
+%   GET /coplex (and bare `/`) -- a small, self-contained (no
+%   external CSS/JS, no build step, no network dependency) HTML admin
+%   dashboard for this REST API: browse the tool catalog, create/run/
+%   inspect/delete harnesses. All of its client-side JS just calls the
+%   ordinary JSON endpoints documented in rest_endpoints/1 through the
+%   absolute `/coplex/...` paths, so it works identically whether the
+%   browser loaded it directly from this server or through the
+%   workbench's stripped-prefix proxy mount (see the module docstring).
+admin_ui_handler(Request) :-
+    ( memberchk(method(options), Request)
+    ->  cors_enable(Request, [methods([get])]),
+        format('~n')
+    ;   cors_enable,
+        format('Content-type: text/html; charset=UTF-8~n~n'),
+        admin_ui_html(Html),
+        format('~s', [Html])
+    ).
+
+%!  admin_ui_html(-Html) is det.
+%
+%   The admin UI's markup, styling, and client-side JS as one
+%   self-contained string -- no external CSS/JS, no build step, no
+%   CDN dependency. All data comes from client-side fetch() calls
+%   against the ordinary JSON endpoints below (absolute /coplex/...
+%   paths), never server-side templating, so this predicate is a
+%   pure, static constant.
+admin_ui_html(Html) :-
+    Html = "<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<title>coplex admin</title>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #e6e8eb;
+    --muted: #9aa3b2; --accent: #4da3ff; --good: #3ecf8e; --bad: #ff6b6b;
+    --warn: #f5b043;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .tag {
+    font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 4px; padding: 2px 6px;
+  }
+  #status { margin-left: auto; font-size: 12px; color: var(--muted); }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  section { margin-bottom: 28px; }
+  h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td {
+    text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .badge {
+    display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .badge-running { color: var(--good); border-color: var(--good); }
+  .badge-idle { color: var(--muted); }
+  .badge-error { color: var(--bad); border-color: var(--bad); }
+  .risk-read_only { color: var(--muted); }
+  .risk-write { color: var(--warn); border-color: var(--warn); }
+  .risk-process, .risk-network { color: var(--bad); border-color: var(--bad); }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  button {
+    background: var(--accent); color: #08131f; border: none; border-radius: 5px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer; font-weight: 600;
+    margin-right: 4px;
+  }
+  button:hover { filter: brightness(1.1); }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button.danger { background: var(--bad); color: #2a0808; }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type=text], select, textarea {
+    background: #0c0e12; border: 1px solid var(--border); color: var(--text);
+    border-radius: 5px; padding: 5px 8px; font-size: 13px; font-family: inherit;
+  }
+  form.create-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+  form.create-form label {
+    display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted);
+  }
+  label.inline { flex-direction: row !important; align-items: center; gap: 5px !important; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); font-style: italic; padding: 10px 0; }
+  #run-modal, #msg-modal {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    align-items: center; justify-content: center; z-index: 10;
+  }
+  #run-modal .box, #msg-modal .box {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 18px; width: 560px; max-width: 92vw; max-height: 80vh; overflow: auto;
+  }
+  #msg-modal .box { width: 720px; }
+  .msg-entry { border-bottom: 1px dashed var(--border); padding: 8px 0; }
+  .msg-role { font-weight: 600; text-transform: uppercase; font-size: 11px; color: var(--accent); }
+  pre.msg-content {
+    white-space: pre-wrap; word-break: break-word; margin: 4px 0 0; font-size: 12px;
+    color: var(--text);
+  }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>coplex</h1>
+  <span class='tag'>admin</span>
+  <span id='status'>loading…</span>
+</header>
+<main>
+
+  <section>
+    <h2>Create harness</h2>
+    <form class='create-form panel' id='create-form'>
+      <label>root <input type='text' id='f-root' value='.' size='18'></label>
+      <label>adapter
+        <select id='f-adapter'>
+          <option value='scripted'>scripted</option>
+          <option value='mock'>mock</option>
+          <option value='openai'>openai</option>
+        </select>
+      </label>
+      <label>model <input type='text' id='f-model' placeholder='default' size='14'></label>
+      <label class='inline'><input type='checkbox' id='f-shell'> allow_shell</label>
+      <label class='inline'><input type='checkbox' id='f-network'> allow_network</label>
+      <button type='submit'>Create</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Harnesses <span class='muted' id='harness-count'></span></h2>
+    <div class='panel'>
+      <table>
+        <thead><tr>
+          <th>id</th><th>task</th><th>state</th><th>step</th><th>msgs/tools</th>
+          <th>last answer / error</th><th>created</th><th>actions</th>
+        </tr></thead>
+        <tbody id='harnesses-body'></tbody>
+      </table>
+      <div class='empty' id='harnesses-empty' style='display:none'>No harnesses yet — create one above.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Tools</h2>
+    <div class='panel'>
+      <table>
+        <thead><tr><th>name</th><th>risk</th><th>endpoint</th><th>description</th></tr></thead>
+        <tbody id='tools-body'></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+<footer>
+  raw status/endpoint list: <a href='/coplex/endpoints'>/coplex/endpoints</a>
+  · <a href='https://github.com/logicmoo/coplex'>coplex on GitHub</a>
+</footer>
+
+<div id='run-modal'>
+  <div class='box'>
+    <h2 style='margin-top:0'>Run task</h2>
+    <p class='muted' id='run-modal-id'></p>
+    <textarea id='run-task' rows='4' style='width:100%' placeholder='Describe the task…'></textarea>
+    <p>
+      <button id='run-submit'>Run (async)</button>
+      <button class='secondary' id='run-cancel'>Cancel</button>
+    </p>
+  </div>
+</div>
+
+<div id='msg-modal'>
+  <div class='box'>
+    <h2 style='margin-top:0'>Messages</h2>
+    <p class='muted' id='msg-modal-id'></p>
+    <div id='msg-list'></div>
+    <p><button class='secondary' id='msg-close'>Close</button></p>
+  </div>
+</div>
+
+<script>
+var BASE = '/coplex';
+var runTargetId = null;
+
+function jfetch(path, opts) {
+  return fetch(BASE + path, opts).then(function (res) {
+    return res.text().then(function (text) {
+      var body = null;
+      try { body = text ? JSON.parse(text) : null; } catch (e) { body = null; }
+      if (!res.ok) {
+        var msg = (body && body.error) ? body.error : ('HTTP ' + res.status);
+        throw new Error(msg);
+      }
+      return body;
+    });
+  });
+}
+
+function el(tag, attrs, children) {
+  var e = document.createElement(tag);
+  attrs = attrs || {};
+  for (var k in attrs) {
+    if (k === 'text') e.textContent = attrs[k];
+    else if (k === 'title') e.title = attrs[k];
+    else if (k === 'class') e.className = attrs[k];
+    else if (k.indexOf('on') === 0 && typeof attrs[k] === 'function') e[k] = attrs[k];
+    else e.setAttribute(k, attrs[k]);
+  }
+  (children || []).forEach(function (c) { e.appendChild(c); });
+  return e;
+}
+
+function truncate(s, n) {
+  s = s || '';
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  return new Date(ts * 1000).toLocaleString();
+}
+
+function button(label, cls, fn) {
+  return el('button', {class: cls || 'secondary', text: label, onclick: fn});
+}
+
+function loadStatus() {
+  jfetch('/endpoints').then(function (s) {
+    var elx = document.getElementById('status');
+    elx.textContent = 'swipl ' + s.swipl_version + ' · port ' + (s.server.port || '?') +
+      ' · ' + (s.server.running ? 'running' : 'stopped');
+  }).catch(function (e) {
+    document.getElementById('status').textContent = 'status unavailable: ' + e.message;
+  });
+}
+
+function loadTools() {
+  jfetch('/tools').then(function (t) {
+    var tbody = document.getElementById('tools-body');
+    tbody.innerHTML = '';
+    (t.tools || []).forEach(function (tool) {
+      tbody.appendChild(el('tr', null, [
+        el('td', null, [el('code', {text: tool.name})]),
+        el('td', null, [el('span', {class: 'badge risk-' + tool.risk, text: tool.risk})]),
+        el('td', null, [el('code', {text: tool.method + ' ' + tool.endpoint})]),
+        el('td', {text: tool.description})
+      ]));
+    });
+  }).catch(function () {});
+}
+
+function openRunModal(id) {
+  runTargetId = id;
+  document.getElementById('run-modal-id').textContent = id;
+  document.getElementById('run-task').value = '';
+  document.getElementById('run-modal').style.display = 'flex';
+}
+
+function closeRunModal() {
+  document.getElementById('run-modal').style.display = 'none';
+  runTargetId = null;
+}
+
+function openMsgModal(id) {
+  document.getElementById('msg-modal-id').textContent = id;
+  var list = document.getElementById('msg-list');
+  list.innerHTML = '';
+  list.appendChild(el('p', {class: 'muted', text: 'loading…'}));
+  document.getElementById('msg-modal').style.display = 'flex';
+  jfetch('/harnesses/' + id + '/messages').then(function (r) {
+    list.innerHTML = '';
+    if (!r.messages || !r.messages.length) {
+      list.appendChild(el('p', {class: 'muted', text: 'No messages yet.'}));
+      return;
+    }
+    r.messages.forEach(function (m) {
+      var content = (typeof m.content === 'string') ? m.content : JSON.stringify(m.content, null, 2);
+      list.appendChild(el('div', {class: 'msg-entry'}, [
+        el('div', {class: 'msg-role', text: m.role}),
+        el('pre', {class: 'msg-content', text: content})
+      ]));
+    });
+  }).catch(function (e) {
+    list.innerHTML = '';
+    list.appendChild(el('p', {class: 'muted', text: 'Failed to load: ' + e.message}));
+  });
+}
+
+function closeMsgModal() {
+  document.getElementById('msg-modal').style.display = 'none';
+}
+
+function harnessAction(id, action) {
+  return jfetch('/harnesses/' + id + '/' + action, {method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(loadHarnesses).catch(function (e) { alert(action + ' failed: ' + e.message); });
+}
+
+function deleteHarness(id) {
+  if (!confirm('Delete harness ' + id + '?')) return;
+  jfetch('/harnesses/' + id, {method: 'DELETE'})
+    .then(loadHarnesses).catch(function (e) { alert('delete failed: ' + e.message); });
+}
+
+function loadHarnesses() {
+  return jfetch('/harnesses').then(function (h) {
+    var tbody = document.getElementById('harnesses-body');
+    var empty = document.getElementById('harnesses-empty');
+    tbody.innerHTML = '';
+    var list = h.harnesses || [];
+    document.getElementById('harness-count').textContent = list.length ? ('(' + list.length + ')') : '';
+    empty.style.display = list.length ? 'none' : 'block';
+    list.forEach(function (hh) {
+      var stateCls = hh.running ? 'badge-running' : (hh.last_error ? 'badge-error' : 'badge-idle');
+      var stateText = hh.running ? 'running' : (hh.last_error ? 'error' : 'idle');
+      var lastText = hh.last_error ? ('error: ' + (hh.last_error.message || hh.last_error))
+                                    : (hh.last_answer || '');
+      var actions = el('td');
+      actions.appendChild(button('Run', null, function () { openRunModal(hh.id); }));
+      actions.appendChild(button('Cancel', null, function () { harnessAction(hh.id, 'cancel'); }));
+      actions.appendChild(button('Reset', null, function () { harnessAction(hh.id, 'reset'); }));
+      actions.appendChild(button('Msgs', null, function () { openMsgModal(hh.id); }));
+      actions.appendChild(button('Delete', 'danger', function () { deleteHarness(hh.id); }));
+      tbody.appendChild(el('tr', null, [
+        el('td', null, [el('code', {text: hh.id.slice(0, 8), title: hh.id})]),
+        el('td', {text: truncate(hh.current_task, 40)}),
+        el('td', null, [el('span', {class: 'badge ' + stateCls, text: stateText})]),
+        el('td', {text: hh.iteration}),
+        el('td', {text: hh.message_count + ' / ' + hh.tool_call_count}),
+        el('td', {text: truncate(lastText, 60)}),
+        el('td', {text: fmtTime(hh.created_at)}),
+        actions
+      ]));
+    });
+  }).catch(function () {});
+}
+
+document.getElementById('create-form').addEventListener('submit', function (ev) {
+  ev.preventDefault();
+  var body = {
+    root: document.getElementById('f-root').value || '.',
+    adapter: document.getElementById('f-adapter').value,
+    allow_shell: document.getElementById('f-shell').checked,
+    allow_network: document.getElementById('f-network').checked
+  };
+  var model = document.getElementById('f-model').value;
+  if (model) body.model = model;
+  jfetch('/harnesses', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)})
+    .then(loadHarnesses)
+    .catch(function (e) { alert('create failed: ' + e.message); });
+});
+
+document.getElementById('run-submit').addEventListener('click', function () {
+  var task = document.getElementById('run-task').value;
+  var id = runTargetId;
+  closeRunModal();
+  jfetch('/harnesses/' + id + '/run', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({task: task, async: true})})
+    .then(loadHarnesses)
+    .catch(function (e) { alert('run failed: ' + e.message); });
+});
+document.getElementById('run-cancel').addEventListener('click', closeRunModal);
+document.getElementById('msg-close').addEventListener('click', closeMsgModal);
+
+loadStatus();
+loadTools();
+loadHarnesses();
+setInterval(loadStatus, 5000);
+setInterval(loadHarnesses, 3000);
+</script>
+</body>
+</html>
+".
+
+
+%!  coplex_endpoints_handler(+Request) is det.
+%
+%   GET /coplex/endpoints (and bare `/endpoints`) -- the same status
+%   document `python plugin.py status` prints on the host side:
+%   identity, swipl version, server binding, path prefixes, and the
+%   endpoint list. This used to live at `/coplex` itself; that path
+%   now serves the admin UI instead (see admin_ui_handler/1) and this
+%   JSON document moved here so a script/monitoring tool can still get
+%   the same machine-readable status it always could.
+coplex_endpoints_handler(Request) :-
     ( memberchk(method(options), Request)
     ->  cors_enable(Request, [methods([get])]),
         format('~n')
@@ -225,6 +633,8 @@ swipl_version_string(Version) :-
     format(string(Version), "~w.~w.~w", [Major, Minor, Patch]).
 
 rest_endpoints([
+    "GET    /coplex (admin UI, HTML)",
+    "GET    /coplex/endpoints",
     "GET    /health",
     "GET    /tools",
     "POST   /tools/<name>",

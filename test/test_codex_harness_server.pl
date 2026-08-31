@@ -66,6 +66,13 @@ http_delete_json(Url, Reply) :-
         json_read_dict(In, Reply),
         close(In)).
 
+%   Raw-text GET, for endpoints that don't reply JSON (the admin UI).
+http_get_text(Url, Text, ContentType) :-
+    setup_call_cleanup(
+        http_open(Url, In, [header(content_type, ContentType)]),
+        read_string(In, _, Text),
+        close(In)).
+
 base_url(Base) :-
     test_port(Port),
     format(atom(Base), 'http://localhost:~w', [Port]).
@@ -75,6 +82,49 @@ test(health, [setup(setup_server), cleanup(teardown_server)]) :-
     atomic_list_concat([Base, '/health'], Url),
     http_get_json(Url, _{}, Reply),
     assertion(Reply.ok == true).
+
+test(admin_ui_serves_html, [setup(setup_server), cleanup(teardown_server)]) :-
+    % GET /coplex now serves the admin dashboard (moved from the old
+    % JSON status document -- see endpoints_moved_to_coplex_endpoints).
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex'], Url),
+    http_get_text(Url, Text, ContentType),
+    assertion(sub_atom(ContentType, _, _, _, 'text/html')),
+    assertion(sub_string(Text, _, _, _, "<!DOCTYPE html>")),
+    assertion(sub_string(Text, _, _, _, "coplex")).
+
+test(admin_ui_bare_root_parity, [setup(setup_server), cleanup(teardown_server)]) :-
+    % Bare `/` serves the identical admin UI -- the same root/prefix
+    % parity every other route in this server already has, needed for
+    % the workbench's stripped-prefix proxy mount to reach it too.
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex'], PrefixedUrl),
+    atomic_list_concat([Base, '/'], RootUrl),
+    http_get_text(PrefixedUrl, PrefixedText, _),
+    http_get_text(RootUrl, RootText, _),
+    assertion(PrefixedText == RootText).
+
+test(endpoints_moved_to_coplex_endpoints, [setup(setup_server), cleanup(teardown_server)]) :-
+    % The JSON status/endpoint-list document that used to live at
+    % GET /coplex moved to GET /coplex/endpoints (and bare
+    % /endpoints); GET /coplex itself is HTML now (see
+    % admin_ui_serves_html), not JSON.
+    base_url(Base),
+    atomic_list_concat([Base, '/coplex/endpoints'], PrefixedUrl),
+    atomic_list_concat([Base, '/endpoints'], RootUrl),
+    http_get_json(PrefixedUrl, _{}, PrefixedReply),
+    http_get_json(RootUrl, _{}, RootReply),
+    assertion(PrefixedReply.ok == true),
+    assertion(PrefixedReply.plugin_id == "coplex"),
+    assertion(is_list(PrefixedReply.endpoints)),
+    assertion(PrefixedReply.endpoints \== []),
+    assertion(RootReply.ok == true),
+    atomic_list_concat([Base, '/coplex'], AdminUrl),
+    catch(
+        ( http_get_json(AdminUrl, _{}, _), AdminIsJson = true ),
+        _,
+        AdminIsJson = false),
+    assertion(AdminIsJson == false).
 
 test(tools_nonempty, [setup(setup_server), cleanup(teardown_server)]) :-
     base_url(Base),
