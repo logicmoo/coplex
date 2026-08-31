@@ -298,7 +298,7 @@ def stop_server(timeout: float = 5.0) -> dict:
 # plugin-lifecycle hooks (names referenced from plugin.json)
 # --------------------------------------------------------------------------
 
-def install() -> dict:
+def install(notice: dict | None = None) -> dict:
     """Verify the one hard requirement (swipl on PATH) before anything
     else runs."""
     swipl = _swipl_path()
@@ -307,7 +307,7 @@ def install() -> dict:
     return {"ok": True, "swipl": swipl, "version": _swipl_version()}
 
 
-def install_after() -> dict:
+def install_after(notice: dict | None = None) -> dict:
     """Post-install smoke test: run the plunit suite once so a broken
     checkout is caught immediately instead of at first use."""
     result = _run_swipl(["-g", "run_tests", "-t", "halt", TEST_SUITE], timeout=120)
@@ -318,19 +318,19 @@ def install_after() -> dict:
     }
 
 
-def uninstall() -> dict:
+def uninstall(notice: dict | None = None) -> dict:
     """Make sure the REST server isn't left running."""
     return stop_server()
 
 
-def uninstall_after() -> dict:
+def uninstall_after(notice: dict | None = None) -> dict:
     return {
         "ok": True,
         "note": "Nothing to remove beyond SWI-Prolog itself; no files were installed outside this plugin directory.",
     }
 
 
-def workbench_startup() -> dict:
+def workbench_startup(notice: dict | None = None) -> dict:
     """Start the shared REST server so the workbench can immediately
     drive this plugin over HTTP."""
     port = int(os.environ.get("COPLEX_PORT", DEFAULT_PORT))
@@ -338,34 +338,34 @@ def workbench_startup() -> dict:
     return start_server(port=port, host=host)
 
 
-def workbench_startup_after() -> dict:
+def workbench_startup_after(notice: dict | None = None) -> dict:
     return status()
 
 
-def workbench_shutdown() -> dict:
+def workbench_shutdown(notice: dict | None = None) -> dict:
     return stop_server()
 
 
-def workbench_shutdown_after() -> dict:
+def workbench_shutdown_after(notice: dict | None = None) -> dict:
     return {"ok": True}
 
 
-def workspace_startup() -> dict:
+def workspace_startup(notice: dict | None = None) -> dict:
     """No-op: harness instances are created on demand per caller via
     POST /harnesses (or a direct harness_new/2 call), not one per
     workspace, so there is nothing workspace-scoped to start."""
     return {"ok": True, "note": "no per-workspace resources"}
 
 
-def workspace_startup_after() -> dict:
+def workspace_startup_after(notice: dict | None = None) -> dict:
     return {"ok": True}
 
 
-def workspace_shutdown() -> dict:
+def workspace_shutdown(notice: dict | None = None) -> dict:
     return {"ok": True, "note": "no per-workspace resources"}
 
 
-def workspace_shutdown_after() -> dict:
+def workspace_shutdown_after(notice: dict | None = None) -> dict:
     return {"ok": True}
 
 

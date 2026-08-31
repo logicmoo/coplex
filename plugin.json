@@ -67,11 +67,27 @@
     "note": "Implemented in plugin.py. workbenchStartup launches prolog/coplex_server_main.pl (a swipl subprocess hosting the REST API in prolog/coplex_server.pl) and waits for /health; workbenchShutdown asks it to shut down gracefully over POST /shutdown, falling back to an OS-level terminate. install checks that swipl is on PATH; installAfter runs the plunit suite as a smoke test. The workspace hooks are no-ops: harness instances are created on demand per caller via POST /harnesses, not one per workspace."
   },
   "plugin-api": {
-    "status": "status",
-    "config": "config",
-    "restart": "restart",
-    "shutdown": "shutdown",
-    "note": "Implemented in plugin.py, backed by the REST server in prolog/coplex_server.pl (routePrefix informational only -- the server listens directly on its own host:port, default http://localhost:8840, overridable via COPLEX_HOST/COPLEX_PORT). status reports swipl/server health; config describes the REST endpoints and the safe harness_new/2 option subset the server accepts from JSON; restart stops and relaunches the server subprocess; shutdown stops it. See README.md's REST API section for the full endpoint list and the security model (no request body is ever parsed as Prolog code or used to construct a callable)."
+    "status": {
+      "method": "GET",
+      "path": "/coplex/health",
+      "call": "status",
+      "description": "swipl/server health through the /coplex mount (plugin.py status() is the CLI equivalent)."
+    },
+    "config": {
+      "method": "GET",
+      "path": "/coplex/tools",
+      "call": "config",
+      "description": "The REST endpoint registry and the safe harness_new/2 option subset (plugin.py config() is the CLI equivalent)."
+    },
+    "restart": {
+      "call": "restart",
+      "description": "Stops and relaunches the swipl server subprocess (plugin.py restart; no HTTP surface)."
+    },
+    "shutdown": {
+      "call": "shutdown",
+      "description": "Stops the swipl server subprocess (plugin.py shutdown; POST /shutdown on the server)."
+    },
+    "note": "Each section's call names the plugin.py function backing it; sections with a path also answer over HTTP through the /coplex mount (the server listens directly on its own host:port, default http://localhost:8840, overridable via COPLEX_HOST/COPLEX_PORT). status reports swipl/server health; config describes the REST endpoints and the safe harness_new/2 option subset the server accepts from JSON; restart stops and relaunches the server subprocess; shutdown stops it. See README.md's REST API section for the full endpoint list and the security model (no request body is ever parsed as Prolog code or used to construct a callable)."
   },
   "ui": {
     "pages": [
